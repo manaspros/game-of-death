@@ -1,0 +1,38 @@
+[
+  {
+    "key": "gemini-3.1-flash-lite",
+    "provider": "aistudio",
+    "modelId": "gemini-3.1-flash-lite",
+    "nativeToolCalling": true,
+    "thinking": "medium",
+    "notes": "Verified working with a new AI Studio key. Lighter and less congested than gemini-flash-latest (an alias for the newest Flash, which showed 503 overload and 429 quota)."
+  },
+  {
+    "key": "groq-llama-3.3-70b",
+    "provider": "groq",
+    "modelId": "llama-3.3-70b-versatile",
+    "nativeToolCalling": true,
+    "notes": "Fast open-weight model on Groq free tier. Verify the model id is still current."
+  },
+  {
+    "key": "gemini-flash",
+    "provider": "aistudio",
+    "modelId": "gemini-flash-latest",
+    "nativeToolCalling": true,
+    "notes": "Google AI Studio free tier; daily request caps are low and change often. Check ai.google.dev/gemini-api/docs/rate-limits."
+  },
+  {
+    "key": "ling-3.0-flash-sante-free",
+    "provider": "openrouter",
+    "modelId": "inclusionai/ling-3.0-flash-sante:free",
+    "nativeToolCalling": true,
+    "notes": "inclusionAI Ling 3.0 Flash Sante, OpenRouter free tier."
+  },
+  {
+    "key": "openrouter-llama-3.3-70b-free",
+    "provider": "openrouter",
+    "modelId": "meta-llama/llama-3.3-70b-instruct:free",
+    "nativeToolCalling": true,
+    "notes": "OpenRouter :free variants rotate without notice. Verify at openrouter.ai/models?max_price=0 and edit modelId as needed."
+  }
+]

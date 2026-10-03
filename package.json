@@ -1,0 +1,25 @@
+{
+  "name": "gameofdeath",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Competitive Conway's Game of Life — build machines, fight via simulation",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "build:bench": "tsc -p tsconfig.bench.json && node -e \"require('fs').writeFileSync('dist-bench/package.json', JSON.stringify({ type: 'commonjs' }))\"",
+    "test:bench": "npm run build:bench && node dist-bench/bench/test/run.js",
+    "smoke:bench": "npm run build:bench && node dist-bench/bench/test/smoke.js",
+    "bench": "npm run build:bench && node --env-file-if-exists=.env dist-bench/bench/run.js",
+    "bench:watch": "BENCH_SPECTATE=1 npm run bench",
+    "studio": "npm run build:bench --silent && vite build && node --env-file-if-exists=.env dist-bench/bench/studio/server.js",
+    "export-video": "npm run build:bench --silent && node dist-bench/bench/video/export.js",
+    "summary": "npm run build:bench --silent && node dist-bench/bench/summary.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

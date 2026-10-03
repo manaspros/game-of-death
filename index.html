@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gameofdeath</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <h1>gameofdeath</h1>
+      <div id="round-info">
+        <span id="round-display">Round 1/10</span>
+        <span id="phase-display">BUILD PHASE</span>
+      </div>
+    </header>
+
+    <main id="main">
+      <div id="player1-panel" class="player-panel p1">
+        <div class="player-label">Player 1</div>
+        <div class="player-stats">
+          <span class="stat-row"><span class="stat-label">Moves</span><strong id="p1-moves">25</strong></span>
+          <span class="stat-row"><span class="stat-label">Heart HP</span><strong id="p1-hp" class="heart-hp">100</strong></span>
+        </div>
+        <div id="p1-presets" class="presets-container"></div>
+      </div>
+
+      <div id="grid-container">
+        <canvas id="grid-canvas"></canvas>
+        <div id="simulation-bar" class="hidden">
+          <span class="sim-label">SIMULATING</span>
+          <div class="sim-progress">
+            <div id="sim-progress-bar" class="progress-bar"></div>
+          </div>
+          <span id="sim-gen-display">Gen 0/100</span>
+        </div>
+      </div>
+
+      <div id="player2-panel" class="player-panel p2">
+        <div class="player-label">Player 2</div>
+        <div class="player-stats">
+          <span class="stat-row"><span class="stat-label">Moves</span><strong id="p2-moves">25</strong></span>
+          <span class="stat-row"><span class="stat-label">Heart HP</span><strong id="p2-hp" class="heart-hp">100</strong></span>
+        </div>
+        <div id="p2-presets" class="presets-container"></div>
+      </div>
+    </main>
+
+    <div id="controls">
+      <div id="control-group-left" class="control-group">
+        <button id="btn-p1-submit" class="btn btn-submit" disabled>Player 1 Submit</button>
+      </div>
+      <div id="control-group-center" class="control-group">
+        <button id="btn-start" class="btn btn-primary" disabled>Start Simulation</button>
+        <button id="btn-skip" class="btn btn-secondary hidden">Skip ▶▶</button>
+        <button id="btn-next-round" class="btn btn-primary hidden">Next Round</button>
+        <button id="btn-new-game" class="btn btn-secondary hidden">New Game</button>
+      </div>
+      <div id="control-group-right" class="control-group">
+        <button id="btn-p2-submit" class="btn btn-submit" disabled>Player 2 Submit</button>
+      </div>
+    </div>
+
+    <div id="settings-bar">
+      <div class="setting">
+        <label for="visibility-mode">Visibility:</label>
+        <select id="visibility-mode">
+          <option value="semi-hidden">Semi-Hidden</option>
+          <option value="visible">Fully Visible</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="preset-select">Preset:</label>
+        <select id="preset-select">
+          <option value="quick">Quick (150×70)</option>
+          <option value="standard" selected>Standard (180×80)</option>
+          <option value="epic">Epic (200×90)</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="sim-speed">Sim Speed:</label>
+        <select id="sim-speed">
+          <option value="fast">Fast</option>
+          <option value="normal" selected>Normal</option>
+          <option value="slow">Slow</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="game-over-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2 id="winner-text">Player 1 Wins!</h2>
+        <div id="final-stats"></div>
+        <button id="btn-play-again" class="btn btn-primary">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

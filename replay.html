@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gameofdeath — replay</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <style>
+    html, body { margin: 0; background: #08080d; height: 100%; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+    #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #8888a0; font: 16px system-ui, sans-serif; text-align: center; padding: 24px; }
+  </style>
+</head>
+<body>
+  <div id="msg">Loading replay…</div>
+  <canvas id="stage" width="1280" height="720" hidden></canvas>
+  <script type="module" src="/src/spectate/replay.ts"></script>
+</body>
+</html>

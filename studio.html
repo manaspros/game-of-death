@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gameofdeath — studio</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <style>
+    @font-face { font-family: 'PressStart'; src: url(/assets/fonts/PressStart2P.woff2) format('woff2'); font-display: swap; }
+    @font-face { font-family: 'PixelBody'; src: url(/assets/fonts/VT323.woff2) format('woff2'); font-display: swap; }
+    :root {
+      --bg-base: #08080d; --bg-surface: #0f0f16; --bg-elevated: #16161f; --border: #1e1e2a; --border-strong: #2a2a3a;
+      --text-primary: #e8e8ed; --text-secondary: #8888a0; --text-tertiary: #555566;
+      --p1: #4a9eff; --p2: #ff6b8a; --ok: #5fd38d; --bad: #ff6b6b; --warn: #f0b955;
+      --font-sans: 'PixelBody', system-ui, sans-serif; --font-pixel: 'PressStart', monospace; --font-mono: ui-monospace, 'JetBrains Mono', Menlo, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body { background: var(--bg-base); color: var(--text-primary); font-family: var(--font-sans); height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: baseline; gap: 14px; padding: 12px 18px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+    header h1 { font: 14px var(--font-pixel); }
+    header .spacer { flex: 1; }
+    .muted { color: var(--text-secondary); font-size: 19px; }
+    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 12px; padding: 12px; }
+    aside { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+    .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .panel h2 { font: 10px var(--font-pixel); color: var(--text-secondary); margin-bottom: 14px; }
+    label { display: block; font-size: 18px; color: var(--text-secondary); margin-bottom: 10px; }
+    select, input { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: 4px; font: 20px var(--font-sans); }
+    button { cursor: pointer; font: 20px var(--font-sans); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg-elevated); color: var(--text-primary); }
+    button:hover:not(:disabled) { border-color: var(--text-secondary); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { width: 100%; background: var(--p1); border-color: var(--p1); color: #04101f; padding: 10px; font-size: 14px; }
+    .info { font: 12px var(--font-mono); color: var(--text-secondary); margin: -4px 0 10px; }
+    #start-msg { margin-top: 10px; font-size: 19px; min-height: 18px; }
+    #start-msg.err { color: var(--bad); } #start-msg.ok { color: var(--ok); }
+    .match { border-top: 1px solid var(--border); padding: 12px 0; }
+    .match:first-child { border-top: 0; padding-top: 0; }
+    .match .title { font-size: 22px; word-break: break-word; }
+    .match .meta { font: 12px var(--font-mono); color: var(--text-secondary); margin: 4px 0 8px; }
+    .match .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .chip { font: 600 11px var(--font-mono); padding: 2px 7px; border-radius: 10px; background: var(--bg-elevated); }
+    .chip.running { color: var(--warn); } .chip.finished { color: var(--ok); } .chip.invalid, .chip.incomplete { color: var(--bad); }
+    .bar { flex: 1; min-width: 80px; height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
+    .bar > div { height: 100%; background: var(--p1); }
+    a.btn { text-decoration: none; display: inline-block; }
+    .stage { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+    .stage-bar { display: flex; align-items: center; gap: 12px; }
+    iframe { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-base); }
+    .empty { color: var(--text-tertiary); font-size: 19px; }
+    #welcome { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(8,8,13,0.94); padding: 24px; }
+    #welcome[hidden] { display: none; }
+    .welcome-card { max-width: 640px; width: 100%; }
+    .welcome-card .big { font: 30px var(--font-pixel); line-height: 1.3; }
+    .welcome-card .tag { font-size: 28px; color: var(--p1); margin: 14px 0 26px; }
+    .welcome-card ol { list-style: none; padding: 0; display: grid; gap: 14px; counter-reset: step; margin-bottom: 30px; }
+    .welcome-card li { counter-increment: step; display: grid; grid-template-columns: 36px 1fr; gap: 12px; font-size: 26px; line-height: 1.2; color: #c9c9d6; }
+    .welcome-card li::before { content: counter(step); font: 12px var(--font-pixel); color: #04101f; background: var(--p1); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; }
+    .welcome-card button.primary { font: 12px var(--font-pixel); padding: 14px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; overflow-y: auto; } iframe { min-height: 420px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>gameofdeath studio</h1>
+    <span class="muted">LLMs fight in Game of Life · watch live · export videos</span>
+    <span class="spacer"></span>
+    <button id="how-btn">How it works</button>
+  </header>
+  <div id="welcome" hidden>
+    <div class="welcome-card">
+      <div class="big" id="w-title"></div>
+      <div class="tag" id="w-tag"></div>
+      <ol id="w-steps"></ol>
+      <button class="primary" id="w-go">ENTER THE ARENA</button>
+    </div>
+  </div>
+  <main>
+    <aside>
+      <section class="panel">
+        <h2>New match</h2>
+        <label>Player 1<select id="p1"></select></label>
+        <label>Player 2<select id="p2"></select></label>
+        <label>Arena<select id="preset"></select></label>
+        <div class="info" id="preset-info"></div>
+        <label>Rounds<input id="rounds" type="number" min="1" max="30" step="1" value="8"></label>
+        <label>Rest between rounds (seconds)<input id="pause" type="number" min="0" max="120" value="8"></label>
+        <button class="primary" id="start">Start match</button>
+        <div id="start-msg"></div>
+      </section>
+      <section class="panel">
+        <h2>Matches</h2>
+        <div id="matches"><div class="empty">Loading…</div></div>
+      </section>
+    </aside>
+    <section class="stage">
+      <div class="stage-bar">
+        <button id="live-btn">Live view</button>
+        <span class="muted" id="stage-title">Showing: live view</span>
+      </div>
+      <iframe id="stage" title="viewer" src="/spectate.html?feed=/api/live/events"></iframe>
+    </section>
+  </main>
+  <script type="module" src="/src/studio/main.ts"></script>
+</body>
+</html>

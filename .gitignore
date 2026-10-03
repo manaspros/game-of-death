@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-bench/
+
+# Bench harness secrets/logs
+.env
+bench-logs/
+# Exported match videos live in ./videos (the folder itself is kept)
+videos/*
+!videos/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+
+# Documentation (not tracked)
+docs/
+current.md
+
+# Test artifacts
+.playwright-mcp/
