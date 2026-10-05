@@ -5,7 +5,7 @@ import { BlueprintBook } from './blueprints';
 import { MatchMemory } from './memory';
 import { buildPostMortem } from './postmortem';
 import { isFatalProviderError } from './llm/errors';
-import type { LLMClient } from './llm/types';
+import type { CostGate, LLMClient } from './llm/types';
 import { runLLMBuildPhase } from './loop';
 import { emitSnapshot, type MatchLogger } from './logger';
 
@@ -16,6 +16,12 @@ export interface MatchResult {
   p2HeartHp: number;
   /** Set when the match was aborted because a provider failed; the result must not be scored. */
   invalid?: { playerId: 1 | 2; reason: string };
+  /** Set when MatchOptions.signal aborted the match (e.g. token budget); the result must not be scored. */
+  aborted?: boolean;
+  /** Set (together with `aborted`) when the match was stopped because its USD cost reached the per-match cap; the result must not be scored. */
+  costCap?: boolean;
+  /** Real USD cost of all LLM calls in this match (sum of the logged costUsd). */
+  costUsd?: number;
 }
 
 export interface MatchOptions {
@@ -25,6 +31,22 @@ export interface MatchOptions {
   maxRounds?: number;
   /** Real rest between rounds: gives providers breathing room and viewers a "next round" screen. */
   roundPauseMs?: number;
+  /** External abort (e.g. a token meter). The match stops as soon as in-flight calls return and reports `aborted`. */
+  signal?: AbortSignal;
+  /** Stop the match once its cumulative LLM cost reaches this many USD. Default: env BENCH_MATCH_MAX_USD, else 1.0. */
+  maxUsd?: number;
+  /** Outer spend admission (the tournament's total budget): consulted, together with the match cap, before every provider request. A refusal aborts the match without costCap. */
+  gate?: CostGate;
+}
+
+export const DEFAULT_MATCH_MAX_USD = 1.0;
+
+/** Per-match USD cap: explicit option, else BENCH_MATCH_MAX_USD, else the default. Non-positive/invalid values fall back to the default. */
+export function resolveMaxUsd(explicit?: number): number {
+  for (const v of [explicit, process.env.BENCH_MATCH_MAX_USD ? Number(process.env.BENCH_MATCH_MAX_USD) : undefined]) {
+    if (v !== undefined && Number.isFinite(v) && v > 0) return v;
+  }
+  return DEFAULT_MATCH_MAX_USD;
 }
 
 /** An LLM client, or 'baseline' for the scripted non-LLM bot. */
@@ -44,6 +66,7 @@ async function runBuildPhase(
   signal: AbortSignal,
   book: BlueprintBook,
   memory: MatchMemory,
+  gate: CostGate,
 ): Promise<void> {
   if (controller === 'baseline') {
     runBaselineBotBuildPhase(state, playerId, (action, applyResult, movesLeftBefore) =>
@@ -51,7 +74,7 @@ async function runBuildPhase(
     );
     emitSnapshot(logger, state);
   } else {
-    await runLLMBuildPhase(state, playerId, controller, logger, signal, book, memory);
+    await runLLMBuildPhase(state, playerId, controller, logger, signal, book, memory, gate);
   }
 }
 
@@ -68,9 +91,68 @@ export async function runMatch(
   presetName: PresetName,
   p1: PlayerController,
   p2: PlayerController,
-  logger: MatchLogger,
+  rawLogger: MatchLogger,
   options: MatchOptions = {},
 ): Promise<MatchResult> {
+  // Own abort so the cost cap and an external signal (token budget) stop the match the same way.
+  const stop = new AbortController();
+  const external = options.signal;
+  if (external?.aborted) stop.abort();
+  else external?.addEventListener('abort', () => stop.abort(), { once: true });
+  const signal = stop.signal;
+
+  const maxUsd = resolveMaxUsd(options.maxUsd);
+  let matchCostUsd = 0;
+  let costCapped = false;
+  // Meters real LLM spend from the logged rows (turn / llm_usage carry costUsd) and stops the match at the cap.
+  const logger: MatchLogger = {
+    log(entry) {
+      const cost = typeof entry.costUsd === 'number' && Number.isFinite(entry.costUsd) ? entry.costUsd : 0;
+      if (cost > 0 && (entry.type === 'turn' || entry.type === 'llm_usage')) {
+        matchCostUsd += cost;
+        rawLogger.log({ ...entry, matchCostUsd });
+        if (matchCostUsd >= maxUsd && !costCapped) {
+          costCapped = true;
+          rawLogger.log({ type: 'match_cost_cap', totalCostUsd: matchCostUsd, maxUsd, reason: 'cost cap' });
+          stop.abort();
+        }
+        return;
+      }
+      rawLogger.log(entry);
+    },
+    ...(rawLogger.snapshot ? { snapshot: (snap: Parameters<NonNullable<MatchLogger['snapshot']>>[0]) => rawLogger.snapshot!(snap) } : {}),
+  };
+
+  // Every provider request first reserves its worst-case cost: refused when spent + in-flight reservations + this one would pass the match cap
+  // (or the outer gate's cap), so concurrent seats and retries cannot jointly overshoot.
+  let reservedUsd = 0;
+  const gate: CostGate = {
+    reserve(usd) {
+      if (signal.aborted) return null;
+      if (matchCostUsd + reservedUsd + usd > maxUsd) {
+        if (!costCapped) {
+          costCapped = true;
+          rawLogger.log({ type: 'match_cost_cap', totalCostUsd: matchCostUsd, maxUsd, reservationUsd: usd, reason: 'cost cap' });
+          stop.abort();
+        }
+        return null;
+      }
+      const outer = options.gate ? options.gate.reserve(usd) : undefined;
+      if (outer === null) {
+        stop.abort();
+        return null;
+      }
+      reservedUsd += usd;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        reservedUsd -= usd;
+        outer?.();
+      };
+    },
+  };
+
   const state = new GameState(presetName);
   if (options.maxRounds !== undefined) state.maxRounds = options.maxRounds;
   logger.log({
@@ -87,7 +169,18 @@ export async function runMatch(
   // What each model wrote to its future self, plus what happened each round (the API itself remembers nothing).
   const memory = new MatchMemory();
 
+  const abortedResult = (): MatchResult => ({
+    winner: null,
+    rounds: state.round,
+    p1HeartHp: state.players[0].heartHp,
+    p2HeartHp: state.players[1].heartHp,
+    aborted: true,
+    ...(costCapped ? { costCap: true } : {}),
+    costUsd: matchCostUsd,
+  });
+
   while (true) {
+    if (signal.aborted) return abortedResult();
     logger.log({
       type: 'round_start',
       round: state.round,
@@ -97,16 +190,24 @@ export async function runMatch(
     });
 
     const abort = new AbortController();
+    const onExternalAbort = () => abort.abort();
+    if (signal.aborted) abort.abort();
+    signal.addEventListener('abort', onExternalAbort);
     let invalid: MatchResult['invalid'];
     const guard = (playerId: 1 | 2, controller: PlayerController) =>
-      runBuildPhase(state, playerId, controller, logger, abort.signal, books[playerId], memory).catch(err => {
+      runBuildPhase(state, playerId, controller, logger, abort.signal, books[playerId], memory, gate).catch(err => {
         if (!isFatalProviderError(err)) throw err;
         invalid ??= { playerId, reason: err.message };
         abort.abort();
       });
 
-    await Promise.all([guard(1, p1), guard(2, p2)]);
+    try {
+      await Promise.all([guard(1, p1), guard(2, p2)]);
+    } finally {
+      signal.removeEventListener('abort', onExternalAbort);
+    }
 
+    if (signal.aborted && !invalid) return abortedResult();
     if (invalid) {
       logger.log({ type: 'match_invalid', round: state.round, playerId: invalid.playerId, reason: invalid.reason });
       return {
@@ -115,6 +216,7 @@ export async function runMatch(
         p1HeartHp: state.players[0].heartHp,
         p2HeartHp: state.players[1].heartHp,
         invalid,
+        costUsd: matchCostUsd,
       };
     }
     emitSnapshot(logger, state);
@@ -156,12 +258,13 @@ export async function runMatch(
     });
 
     if (result.isGameOver) {
-      logger.log({ type: 'match_end', ...result });
+      logger.log({ type: 'match_end', ...result, margin: result.p1HeartHp - result.p2HeartHp });
       return {
         winner: result.winner,
         rounds: state.round,
         p1HeartHp: result.p1HeartHp,
         p2HeartHp: result.p2HeartHp,
+        costUsd: matchCostUsd,
       };
     }
 

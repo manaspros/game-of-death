@@ -7,7 +7,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      input: { main: 'index.html', spectate: 'spectate.html', replay: 'replay.html', studio: 'studio.html' },
+      input: { main: 'index.html', spectate: 'spectate.html', replay: 'replay.html', studio: 'studio.html', leaderboard: 'leaderboard.html' },
     },
   },
   preview: {

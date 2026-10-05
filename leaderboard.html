@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gameofdeath — leaderboard</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <style>
+    @font-face { font-family: 'PressStart'; src: url(/assets/fonts/PressStart2P.woff2) format('woff2'); font-display: swap; }
+    @font-face { font-family: 'PixelBody'; src: url(/assets/fonts/VT323.woff2) format('woff2'); font-display: swap; }
+    :root {
+      --bg-base: #08080d; --bg-surface: #0f0f16; --bg-elevated: #16161f; --border: #1e1e2a; --border-strong: #2a2a3a;
+      --text-primary: #e8e8ed; --text-secondary: #8888a0; --text-tertiary: #555566;
+      --p1: #4a9eff; --p2: #ff6b8a; --ok: #5fd38d; --bad: #ff6b6b; --warn: #f0b955;
+      --font-sans: 'PixelBody', system-ui, sans-serif; --font-pixel: 'PressStart', monospace; --font-mono: ui-monospace, 'JetBrains Mono', Menlo, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body { background: var(--bg-base); color: var(--text-primary); font-family: var(--font-sans); font-size: 20px; }
+    header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 14px; padding: 12px 18px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+    header h1 { font: 14px var(--font-pixel); }
+    header .spacer { flex: 1; }
+    a { color: var(--p1); }
+    .muted { color: var(--text-secondary); font-size: 19px; }
+    main { padding: 12px; display: grid; gap: 12px; max-width: 1200px; margin: 0 auto; }
+    .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
+    .panel h2 { font: 10px var(--font-pixel); color: var(--text-secondary); margin-bottom: 14px; }
+    select { padding: 8px 10px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: 4px; font: 20px var(--font-sans); max-width: 100%; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font: 13px var(--font-mono); }
+    th, td { text-align: right; padding: 6px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+    th { color: var(--text-secondary); font-weight: 600; border-top: 0; }
+    th:nth-child(2), td:nth-child(2) { text-align: left; }
+    td.model { white-space: normal; word-break: break-word; font-family: var(--font-sans); font-size: 20px; }
+    .ci { color: var(--text-secondary); }
+    .match { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .match:first-child { border-top: 0; }
+    .match .vs { flex: 1 1 260px; word-break: break-word; }
+    .match .meta { font: 12px var(--font-mono); color: var(--text-secondary); }
+    .win { color: var(--ok); } .void { color: var(--warn); }
+    .empty, #msg.err { color: var(--bad); }
+    #msg { min-height: 20px; }
+    @media (max-width: 600px) { header { padding: 10px 12px; } main { padding: 8px; } td.model { font-size: 18px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>gameofdeath leaderboard</h1>
+    <span class="muted">round-robin tournaments · Bradley-Terry rating</span>
+    <span class="spacer"></span>
+    <a href="/">Studio</a>
+  </header>
+  <main>
+    <section class="panel">
+      <label class="muted">Tournament <select id="pick"></select></label>
+      <div id="msg" class="muted"></div>
+      <div class="muted" id="summary"></div>
+    </section>
+    <section class="panel">
+      <h2>Standings</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Model</th><th>Rating (95% CI)</th><th>Games</th><th>W/D/L</th><th>Win%</th>
+            <th>Avg margin</th><th>Invalid+skip/game</th><th>Tokens/game</th><th>Void</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Matches</h2>
+      <div id="matches"></div>
+    </section>
+  </main>
+  <script type="module">
+    const $ = id => document.getElementById(id);
+    const f0 = v => (v === null || v === undefined ? '-' : v.toFixed(0));
+    const f1 = v => (v === null || v === undefined ? '-' : v.toFixed(1));
+
+    function el(tag, text, cls) {
+      const e = document.createElement(tag);
+      if (text !== undefined) e.textContent = text;
+      if (cls) e.className = cls;
+      return e;
+    }
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      return body;
+    }
+
+    function render(lb) {
+      $('summary').textContent = `${lb.matches} matches counted, ${lb.voidMatches} void. Rating anchor: ${lb.anchor === 'baseline' ? 'baseline' : 'geometric mean'} = 1000. CI from ${lb.bootstrap} bootstrap resamples.`;
+      const rows = $('rows');
+      rows.replaceChildren();
+      for (const m of lb.models) {
+        const tr = el('tr');
+        const rating = el('td', m.rating === null ? '-' : f0(m.rating));
+        if (m.rating !== null) rating.append(el('span', ` (${f0(m.ciLow)}..${f0(m.ciHigh)})`, 'ci'));
+        const skip = m.games ? f1((m.invalidPerGame || 0) + (m.autoSkipsPerGame || 0)) : '-';
+        tr.append(
+          el('td', String(m.rank)), el('td', m.model, 'model'), rating, el('td', String(m.games)),
+          el('td', `${m.wins}/${m.draws}/${m.losses}`), el('td', m.winRate === null ? '-' : `${(m.winRate * 100).toFixed(0)}%`),
+          el('td', f1(m.avgMargin)), el('td', skip), el('td', f0(m.avgTokensPerGame)), el('td', String(m.voidGames)),
+        );
+        rows.append(tr);
+      }
+      if (!lb.models.length) {
+        const tr = el('tr');
+        tr.append(el('td', 'No results yet.', 'empty'));
+        rows.append(tr);
+      }
+
+      const list = $('matches');
+      list.replaceChildren();
+      for (const m of lb.matchList) {
+        const row = el('div', undefined, 'match');
+        const vs = el('div', `#${m.index} ${m.p1} (P1) vs ${m.p2} (P2)`, 'vs');
+        const verdict = m.void ? el('span', `void: ${m.voidReason || 'error'}`, 'void')
+          : m.winner === 'draw' ? el('span', 'draw') : el('span', `${m.winnerModel} wins`, 'win');
+        const meta = el('span', `${m.rounds} rounds · margin ${m.margin > 0 ? '+' : ''}${m.margin}`, 'meta');
+        const link = el('a', 'Replay');
+        link.href = `/replay.html?log=${encodeURIComponent(`/api/tournaments/${lb.tournamentId}/log/${m.logName}`)}&play=1`;
+        link.target = '_blank';
+        row.append(vs, verdict, meta, link);
+        if (m.video) {
+          const video = el('a', 'Video');
+          video.href = `/api/tournaments/${lb.tournamentId}/video/${m.video}`;
+          video.target = '_blank';
+          row.append(video);
+        }
+        list.append(row);
+      }
+      if (!lb.matchList.length) list.append(el('div', 'No matches.', 'empty'));
+    }
+
+    async function show(id) {
+      $('msg').className = 'muted';
+      $('msg').textContent = 'Loading…';
+      try {
+        render(await getJson(`/api/leaderboard?id=${encodeURIComponent(id)}`));
+        $('msg').textContent = '';
+        history.replaceState(null, '', `?id=${encodeURIComponent(id)}`);
+      } catch (err) {
+        $('msg').className = 'err';
+        $('msg').textContent = err.message;
+      }
+    }
+
+    async function init() {
+      const pick = $('pick');
+      try {
+        const { tournaments } = await getJson('/api/tournaments');
+        if (!tournaments.length) {
+          $('msg').textContent = 'No tournaments yet. Run npm run tournament first.';
+          return;
+        }
+        for (const t of tournaments) pick.append(new Option(`${t.id} (${t.matches} matches)`, t.id));
+        const want = new URLSearchParams(location.search).get('id');
+        if (want && tournaments.some(t => t.id === want)) pick.value = want;
+        pick.addEventListener('change', () => show(pick.value));
+        await show(pick.value);
+      } catch (err) {
+        $('msg').className = 'err';
+        $('msg').textContent = err.message;
+      }
+    }
+    init();
+  </script>
+</body>
+</html>

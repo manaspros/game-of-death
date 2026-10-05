@@ -67,9 +67,11 @@ export class MatchMemory {
   recordAction(playerId: 1 | 2, action: BenchAction, result: ActionResult): void {
     if (!result.ok) return;
     const text = compactAction(action);
-    if (text) this.pending[playerId].push(text);
+    // A partly applied placement is remembered as such, so history and the report never show it as the full shape.
+    const shown = text && result.partial ? `${text} [only ${result.partial.placed}/${result.partial.total} cells]` : text;
+    if (shown) this.pending[playerId].push(shown);
     if (text && result.placedCells && result.placedCells.length > 0) {
-      this.placed[playerId].push({ label: text, cells: result.placedCells });
+      this.placed[playerId].push({ label: shown ?? text, cells: result.placedCells, partial: result.partial });
     }
   }
 

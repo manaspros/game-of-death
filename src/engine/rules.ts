@@ -1,30 +1,26 @@
 import type { Cell } from './cell';
 import type { Owner } from './types';
 
-/** Owner of a cell born from the given alive neighbors. */
-export function determineOwner(neighbors: Cell[]): Owner {
-  let p1 = 0;
-  let p2 = 0;
-  let neutral = 0;
-  for (const n of neighbors) {
-    if (!n.alive) continue;
-    if (n.owner === 'p1') p1++;
-    else if (n.owner === 'p2') p2++;
-    else neutral++;
-  }
-
-  if (p1 > 0 && p2 === 0 && neutral === 0) return 'p1';
-  if (p2 > 0 && p1 === 0 && neutral === 0) return 'p2';
-  return 'neutral';
+/**
+ * Owner of a cell born on an empty square, given how many live neighbors of each owner it has.
+ * Each owner follows Life on its own cells: it is born only if exactly one owner has exactly 3 neighbors
+ * there. If two owners both have exactly 3, nothing is born.
+ */
+export function birthOwner(counts: Record<Owner, number>): Owner | null {
+  const owners = (['p1', 'p2', 'neutral'] as const).filter(o => counts[o] === 3);
+  return owners.length === 1 ? owners[0] : null;
 }
 
-/** Standard B3/S23 Game of Life survival rule. */
-export function shouldSurvive(cell: Cell, aliveNeighborCount: number): boolean {
+/** Standard B3/S23 survival rule, applied to the number of live neighbors of the cell's own owner. */
+export function shouldSurvive(cell: Cell, ownNeighborCount: number): boolean {
   if (cell.alive) {
-    return aliveNeighborCount === 2 || aliveNeighborCount === 3;
+    return ownNeighborCount === 2 || ownNeighborCount === 3;
   }
-  return aliveNeighborCount === 3;
+  return ownNeighborCount === 3;
 }
 
-/** Most HP a heart can lose in one generation, however many enemy cells sit in its zone. */
-export const HEART_DAMAGE_CAP_PER_GEN = 5;
+/** HP a heart loses for each enemy cell inside its zone. */
+export const HEART_DAMAGE_PER_CELL = 10;
+
+/** Most enemy cells that deal damage to a heart in one generation (so at most 5 x 10 = 50 HP); extra cells are still removed. */
+export const HEART_DAMAGE_CELL_CAP_PER_GEN = 5;

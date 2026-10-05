@@ -5,6 +5,7 @@ import {
   extractAnalysis,
   extractNotes,
   extractRationale,
+  checkRequiredFields,
   SYSTEM_PROMPT,
   TOOL_DEFS,
   toolCallToActions,
@@ -82,9 +83,6 @@ export class AiStudioClient implements LLMClient {
   ): Promise<LLMCallResult> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelId}:generateContent`;
 
-    const waited = (await this.limiter?.acquire()) ?? 0;
-    if (waited >= 1000) hooks?.throttled?.({ waitMs: waited });
-
     const { value, latencyMs } = await postJsonWithRetry<GeminiResponse, Omit<LLMCallResult, 'latencyMs'>>(
       this.provider,
       url,
@@ -94,6 +92,9 @@ export class AiStudioClient implements LLMClient {
         const parts = json.candidates?.[0]?.content?.parts ?? [];
         const call = parts.find(p => p.functionCall)?.functionCall;
         if (!call) throw new Error('Model response contained no function call.');
+        // Same rule as the OpenAI-compatible clients: unusable shapes fail, empty prose (analysis/rationale/notes) is accepted and reported.
+        const { fatal, lenient } = checkRequiredFields(call.name, call.args ?? {});
+        if (fatal.length > 0) throw new Error(`Tool call is missing required fields: ${fatal.join(', ')}.`);
         return {
           actions: toolCallToActions(call.name, call.args ?? {}),
           rationale: extractRationale(call.args ?? {}),
@@ -102,9 +103,11 @@ export class AiStudioClient implements LLMClient {
           thoughtTokens: json.usageMetadata?.thoughtsTokenCount,
           promptTokens: json.usageMetadata?.promptTokenCount,
           completionTokens: json.usageMetadata?.candidatesTokenCount,
+          ...(lenient.length > 0 ? { missingFields: lenient } : {}),
         };
       },
       hooks,
+      this.limiter ? { acquire: () => this.limiter!.acquire() } : {},
     );
 
     return { ...value, latencyMs };

@@ -12,10 +12,12 @@
     "test:bench": "npm run build:bench && node dist-bench/bench/test/run.js",
     "smoke:bench": "npm run build:bench && node dist-bench/bench/test/smoke.js",
     "bench": "npm run build:bench && node --env-file-if-exists=.env dist-bench/bench/run.js",
+    "tournament": "npm run build:bench && node --env-file-if-exists=.env dist-bench/bench/tournament.js",
     "bench:watch": "BENCH_SPECTATE=1 npm run bench",
     "studio": "npm run build:bench --silent && vite build && node --env-file-if-exists=.env dist-bench/bench/studio/server.js",
-    "export-video": "npm run build:bench --silent && node dist-bench/bench/video/export.js",
-    "summary": "npm run build:bench --silent && node dist-bench/bench/summary.js"
+    "export-video": "npm run build:bench --silent && node --env-file-if-exists=.env dist-bench/bench/video/export.js",
+    "summary": "npm run build:bench --silent && node dist-bench/bench/summary.js",
+    "leaderboard": "npm run build:bench --silent && node dist-bench/bench/leaderboard.js"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

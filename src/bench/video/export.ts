@@ -1,8 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, type Dirent } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, extname, join, posix, resolve, win32 } from 'node:path';
 import { latestLogPath } from '../logFiles';
 import { buildTimeline, parseJsonl } from '../replay';
 
@@ -33,22 +33,137 @@ export interface ExportOptions {
   onProgress?: (done: number, total: number) => void;
 }
 
-function findChrome(): string {
-  const fromEnv = process.env.CHROME_PATH;
-  if (fromEnv && existsSync(fromEnv)) return fromEnv;
-  const names = ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'chrome'];
-  for (const dir of (process.env.PATH ?? '').split(':')) {
+/** Where to look: injectable so Windows/POSIX rules can be tested on any machine. */
+export interface ToolSearch {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  exists?: (path: string) => boolean;
+}
+
+function searchContext(search: ToolSearch) {
+  const platform = search.platform ?? process.platform;
+  const env = search.env ?? process.env;
+  const win = platform === 'win32';
+  const pathMod = win ? win32 : posix;
+  const exists = search.exists ?? existsSync;
+  const dirs = (env.PATH ?? env.Path ?? '')
+    .split(pathMod.delimiter)
+    .map(d => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
+  return { env, win, pathMod, exists, dirs };
+}
+
+function firstOnPath(names: string[], search: ToolSearch): string | null {
+  const { pathMod, exists, dirs } = searchContext(search);
+  for (const dir of dirs) {
     for (const name of names) {
-      const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
+      const candidate = pathMod.join(dir, name);
+      if (exists(candidate)) return candidate;
     }
+  }
+  return null;
+}
+
+/** An executable named by an env var: the path when it exists, null when unset, an error when set but wrong (a typo must not silently fall through). */
+function fromEnvVar(name: string, search: ToolSearch): string | null {
+  const { env, exists } = searchContext(search);
+  const value = env[name];
+  if (!value) return null;
+  if (!exists(value)) throw new Error(`${name} is set to "${value}", but that file does not exist.`);
+  return value;
+}
+
+/** Chrome (or, on Windows, Edge as a fallback) for headless rendering: CHROME_PATH, then PATH, then the standard install folders. */
+export function findChrome(search: ToolSearch = {}): string {
+  const fromEnv = fromEnvVar('CHROME_PATH', search);
+  if (fromEnv) return fromEnv;
+  const { env, win, pathMod, exists } = searchContext(search);
+  const onPath = firstOnPath(
+    win ? ['chrome.exe', 'google-chrome.exe', 'chromium.exe'] : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'chrome'],
+    search,
+  );
+  if (onPath) return onPath;
+  if (win) {
+    const pf = env.PROGRAMFILES ?? 'C:\\Program Files';
+    const pf86 = env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)';
+    const local = env.LOCALAPPDATA;
+    const known = [
+      pathMod.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      pathMod.join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ...(local ? [pathMod.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')] : []),
+      pathMod.join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      pathMod.join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    ];
+    const hit = known.find(p => exists(p));
+    if (hit) return hit;
   }
   throw new Error('Chrome/Chromium not found. Install it or set CHROME_PATH to its executable.');
 }
 
-function ensureFfmpeg(): void {
-  const probe = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
-  if (probe.error || probe.status !== 0) throw new Error('ffmpeg not found on PATH. Install ffmpeg to export videos.');
+/** Looks for bin/ffmpeg.exe below a winget package folder (the version folder name changes), a few levels deep. */
+function findInTree(root: string, depth: number): string | null {
+  if (depth < 0) return null;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (e.isFile() && e.name.toLowerCase() === 'ffmpeg.exe' && basename(root).toLowerCase() === 'bin') return join(root, e.name);
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const hit = findInTree(join(root, e.name), depth - 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** ffmpeg: FFMPEG_PATH, then PATH, then (Windows) the winget links folder and winget's Gyan.FFmpeg package. */
+export function findFfmpeg(search: ToolSearch = {}): string {
+  const fromEnv = fromEnvVar('FFMPEG_PATH', search);
+  if (fromEnv) return fromEnv;
+  const { env, win, pathMod, exists } = searchContext(search);
+  const onPath = firstOnPath(win ? ['ffmpeg.exe', 'ffmpeg'] : ['ffmpeg'], search);
+  if (onPath) return onPath;
+  const local = win ? env.LOCALAPPDATA : undefined;
+  if (local) {
+    const link = pathMod.join(local, 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe');
+    if (exists(link)) return link;
+    const packages = pathMod.join(local, 'Microsoft', 'WinGet', 'Packages');
+    let names: string[] = [];
+    try {
+      names = readdirSync(packages).filter(n => n.toLowerCase().startsWith('gyan.ffmpeg'));
+    } catch {
+      /* no winget packages folder */
+    }
+    for (const name of names) {
+      const hit = findInTree(pathMod.join(packages, name), 4);
+      if (hit) return hit;
+    }
+  }
+  throw new Error('ffmpeg not found. Install it (e.g. winget install Gyan.FFmpeg) and put it on PATH, or set FFMPEG_PATH to ffmpeg(.exe).');
+}
+
+/** Resolves ffmpeg and checks that it runs; returns its path. */
+function ensureFfmpeg(): string {
+  const path = findFfmpeg();
+  const probe = spawnSync(path, ['-version'], { stdio: 'ignore' });
+  if (probe.error || probe.status !== 0) throw new Error(`ffmpeg at "${path}" does not run (set FFMPEG_PATH to a working ffmpeg).`);
+  return path;
+}
+
+/** Null when video export can work on this machine (Chrome and ffmpeg both found, ffmpeg runs), else a human-readable reason. */
+export function videoExportProblem(): string | null {
+  try {
+    findChrome();
+    ensureFfmpeg();
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 function serve(distDir: string, logPath: string): Promise<{ server: Server; port: number }> {
@@ -174,9 +289,9 @@ function stopProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
+function runFfmpeg(ffmpeg: string, args: string[]): Promise<void> {
   return new Promise((ok, fail) => {
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     proc.stderr?.on('data', c => (err += String(c)));
     proc.on('exit', code => (code === 0 ? ok() : fail(new Error(`ffmpeg failed (code ${code}): ${err.slice(-600)}`))));
@@ -184,7 +299,7 @@ function runFfmpeg(args: string[]): Promise<void> {
 }
 
 export async function exportVideo(opts: ExportOptions): Promise<{ outPath: string; seconds: number; frames: number }> {
-  ensureFfmpeg();
+  const ffmpeg = ensureFfmpeg();
   if (!existsSync(opts.logPath)) throw new Error(`Log not found: ${opts.logPath}`);
 
   const timeline = buildTimeline(parseJsonl(readFileSync(opts.logPath, 'utf8')));
@@ -196,7 +311,8 @@ export async function exportVideo(opts: ExportOptions): Promise<{ outPath: strin
   const distDir = resolve('dist');
   if (opts.build || !existsSync(join(distDir, 'replay.html'))) {
     console.log('Building the replay page...');
-    const build = spawnSync(resolve('node_modules/.bin/vite'), ['build'], { encoding: 'utf8' });
+    // Run vite through node: node_modules/.bin/vite is a shell script that Windows cannot spawn directly.
+    const build = spawnSync(process.execPath, [resolve('node_modules/vite/bin/vite.js'), 'build'], { encoding: 'utf8' });
     if (build.status !== 0) throw new Error(`vite build failed:\n${build.stdout}\n${build.stderr}`);
   }
 
@@ -245,7 +361,7 @@ export async function exportVideo(opts: ExportOptions): Promise<{ outPath: strin
 
     mkdirSync(resolve(opts.outPath, '..'), { recursive: true });
     console.log('Encoding with ffmpeg...');
-    await runFfmpeg([
+    await runFfmpeg(ffmpeg, [
       '-y', '-hide_banner', '-loglevel', 'error',
       '-f', 'concat', '-safe', '0', '-i', join(framesDir, 'list.txt'),
       '-vf', `fps=${opts.fps},format=yuv420p`,

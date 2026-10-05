@@ -3,8 +3,8 @@ import type { GameState } from '../game/state';
 import { applyBenchAction } from './action';
 import type { BlueprintBook } from './blueprints';
 import type { MatchMemory } from './memory';
-import { isFatalProviderError, ModelResponseError } from './llm/errors';
-import type { LLMClient } from './llm/types';
+import { isFatalProviderError, ModelResponseError, RequestNotSentError } from './llm/errors';
+import type { CostGate, LLMClient } from './llm/types';
 import { emitSnapshot, type MatchLogger } from './logger';
 import { serializeObservation } from './observation';
 import { describeAction } from './replay';
@@ -33,6 +33,7 @@ export async function runLLMBuildPhase(
   signal?: AbortSignal,
   book?: BlueprintBook,
   memory?: MatchMemory,
+  gate?: CostGate,
 ): Promise<void> {
   const player = state.players[playerId - 1];
   const presetNames = PATTERNS.map(p => p.name);
@@ -50,14 +51,21 @@ export async function runLLMBuildPhase(
     let callResult;
     try {
       callResult = await client.getAction(observation, presetNames, lastRejection, {
+        canSend: () => !signal?.aborted,
+        ...(gate ? { reserve: (usd: number) => gate.reserve(usd) } : {}),
         attemptFailed: info =>
           logger.log({ type: 'attempt_failed', playerId, modelId: client.modelId, callIndex: calls, ...info }),
         throttled: info =>
           logger.log({ type: 'throttled', playerId, modelId: client.modelId, callIndex: calls, ...info }),
+        usage: info => logger.log({ type: 'llm_usage', playerId, modelId: client.modelId, callIndex: calls, ...info }),
+        escalated: info =>
+          logger.log({ type: 'truncation_retry', playerId, modelId: client.modelId, callIndex: calls, ...info }),
         waiting: info =>
           logger.log({ type: 'call_waiting', playerId, modelId: client.modelId, callIndex: calls, ...info }),
       });
     } catch (err) {
+      // The match was stopped (e.g. USD cap) before the request went out: leave quietly, runMatch reports the abort.
+      if (err instanceof RequestNotSentError) return;
       if (isFatalProviderError(err)) {
         logger.log({ type: 'llm_error', playerId, modelId: client.modelId, callIndex: calls, error: err.message });
         throw err;
@@ -69,20 +77,38 @@ export async function runLLMBuildPhase(
           modelId: client.modelId,
           callIndex: calls,
           error: err.message,
+          finishReason: err.finishReason,
+          rawArgs: err.rawArgs,
         });
         lastRejection = `Your last response was unusable (${err.message}). Call one of the tools with all required fields.`;
-        illegalStreak++;
-        if (illegalStreak >= ILLEGAL_RETRY_CAP) {
-          logger.log({ type: 'auto_skip', playerId, callIndex: calls, reason: err.message });
-          break;
-        }
-        continue;
+        // The client already spent the original call plus one retry (escalated for truncation); a further loop round only multiplies the bill.
+        logger.log({ type: 'auto_skip', playerId, callIndex: calls, reason: err.message });
+        break;
       }
       throw err;
+    }
+    if (callResult.missingFields?.length) {
+      // Accepted anyway (the placements are valid); recorded so prompt/model quality problems stay visible.
+      logger.log({ type: 'missing_fields_warning', playerId, modelId: client.modelId, callIndex: calls, fields: callResult.missingFields });
+    }
+    if (signal?.aborted || callResult.actions.length === 0) {
+      // No turn row will carry this (billed) call's usage, so log it on its own.
+      logger.log({
+        type: 'llm_usage',
+        playerId,
+        modelId: client.modelId,
+        callIndex: calls,
+        promptTokens: callResult.promptTokens,
+        completionTokens: callResult.completionTokens,
+        thoughtTokens: callResult.thoughtTokens,
+        costUsd: callResult.costUsd,
+        costSource: callResult.costSource,
+      });
     }
     if (signal?.aborted) return;
 
     const failures: string[] = [];
+    const warnings: string[] = [];
     let succeeded = 0;
     let submitted = false;
 
@@ -92,10 +118,15 @@ export async function runLLMBuildPhase(
       const movesLeftBefore = player.movesLeft;
 
       let applyResult: ActionResult;
-      try {
-        applyResult = applyBenchAction(state, playerId, action, book);
-      } catch (err) {
-        applyResult = { ok: false, error: `Threw while applying action: ${String(err)}` };
+      if (action.action === 'submit' && i > 0 && failures.length > 0) {
+        // end_turn came with placements and some of them failed: keep the turn open so the model can fix them.
+        applyResult = { ok: false, error: 'end_turn was NOT applied because a placement in this call failed. Fix it and call again (end_turn=true when done).' };
+      } else {
+        try {
+          applyResult = applyBenchAction(state, playerId, action, book);
+        } catch (err) {
+          applyResult = { ok: false, error: `Threw while applying action: ${String(err)}` };
+        }
       }
 
       logger.log({
@@ -118,18 +149,23 @@ export async function runLLMBuildPhase(
         promptTokens: i === 0 ? callResult.promptTokens : undefined,
         completionTokens: i === 0 ? callResult.completionTokens : undefined,
         thoughtTokens: i === 0 ? callResult.thoughtTokens : undefined,
+        costUsd: i === 0 ? callResult.costUsd : undefined,
+        costSource: i === 0 ? callResult.costSource : undefined,
+        finishReason: i === 0 ? callResult.finishReason : undefined,
+        rawArgs: i === 0 ? callResult.rawArgs : undefined,
       });
 
       memory?.recordAction(playerId, action, applyResult);
       if (applyResult.ok) succeeded++;
-      else failures.push(`${describeAction(action)}: ${applyResult.error}`);
+      if (applyResult.warning) warnings.push(`WARNING (placed, but incomplete): ${applyResult.warning}`);
+      if (!applyResult.ok) failures.push(`${describeAction(action)}: ${applyResult.error}`);
       if (applyResult.submitted) submitted = true;
     }
 
     if (callResult.notes) memory?.setNotes(playerId, callResult.notes);
     emitSnapshot(logger, state);
 
-    lastRejection = failures.length > 0 ? failures.join(' | ') : undefined;
+    lastRejection = failures.length + warnings.length > 0 ? [...failures, ...warnings].join(' | ') : undefined;
     if (succeeded === 0) {
       illegalStreak++;
       if (illegalStreak >= ILLEGAL_RETRY_CAP) {

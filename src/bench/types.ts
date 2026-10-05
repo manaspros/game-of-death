@@ -38,6 +38,8 @@ export interface Observation {
   round: number;
   maxRounds: number;
   generationsPerRound: number;
+  /** A cell dies of old age this many generations after it was placed or born. */
+  cellMaxAge: number;
   /** Board size in cells: x runs 0..width-1 and y runs 0..height-1. Anything that leaves it breaks up. */
   board: { width: number; height: number };
   phase: Phase;
@@ -52,6 +54,8 @@ export interface Observation {
     heartPlaced: boolean;
     /** Box of your Heart, or null until you place it. Heart cells are fixed and never listed in `cells`. */
     heartZone: Zone | null;
+    /** The actual squares of your Heart (fixed, always occupied); the rest of its box is empty. */
+    heartCells: CellXY[];
     buildZone: Zone;
     blueprints: ObservedBlueprint[];
     /** For every pattern and blueprint you can place: the anchors that keep it inside your zone. Anything outside is rejected. */
@@ -60,19 +64,24 @@ export interface Observation {
     cells: CellXY[];
     /** Enemy or neutral cells currently inside your build zone: the ones that can hurt your Heart. */
     intruders: CellXY[];
-    /** Enemy cells inside your Heart box right now; each one costs you HP every generation. */
+    /** Enemy cells inside your Heart box right now; each costs you 1 HP when the generation ends and is then destroyed. */
     enemyCellsInsideHeartBox: CellXY[];
   };
   opponent: {
     heartHp: number;
     /** Box of their Heart once you have seen it (from round 2), else null. */
     heartZone: Zone | null;
+    /** The actual squares of their Heart once seen (empty until then). */
+    heartCells: CellXY[];
     buildZone: Zone;
-    /** Their cells you can see inside their zone (last round's, unless visibility is "visible"). */
+    /**
+     * Their placements at generation 0 of LAST round (launch pads before that round ran), NOT their live cells now;
+     * with visibilityMode "visible" it is their cells right now.
+     */
     visibleCells: CellXY[];
     /** Your own cells that are inside their zone, at their current positions. */
     yourCellsThere: CellXY[];
-    /** Your cells inside their Heart box right now; each one costs them HP every generation and keeps doing so until destroyed. */
+    /** Your cells inside their Heart box right now; each costs them 1 HP when the generation ends and is then destroyed. */
     yourCellsInsideHeartBox: CellXY[];
   };
   /** The only memory the model has between calls: what it wrote last time, plus what happened in earlier rounds. */
@@ -129,6 +138,10 @@ export interface ActionResult {
   ok: boolean;
   /** For a successful pattern placement: the cells it really added (cells already alive are skipped). */
   placedCells?: [number, number][];
+  /** Set when a placement was only partly applied: cells landed out of cells in the shape, and the squares skipped with the reason. */
+  partial?: { placed: number; total: number; skipped: { x: number; y: number; reason: string }[] };
+  /** Human-readable form of `partial`, fed back to the model while its turn is still open. */
+  warning?: string;
   error?: string;
   submitted?: boolean;
 }

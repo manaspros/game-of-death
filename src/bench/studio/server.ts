@@ -4,11 +4,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, resolve } from 'node:path';
 import { PRESETS } from '../../game/presets';
 import { API_KEY_ENV, createClient, getModelEntry, MODEL_REGISTRY } from '../llm/registry';
+import { isSafeId, leaderboardResponse, listTournaments, TournamentNotFoundError } from '../leaderboard';
 import { listLogs, LOG_DIR } from '../logFiles';
 import { createFileLogger, withConsole } from '../logger';
 import { runMatch, type MatchResult, type PlayerController } from '../match';
 import { parseJsonl, type LogEvent } from '../replay';
 import { createEventHub } from '../spectator';
+import { TOURNAMENT_DIR, TOURNAMENT_VIDEO_DIR } from '../tournament';
 
 /**
  * Local control panel backend: start matches, watch them live, browse past
@@ -40,6 +42,14 @@ export interface StudioOptions {
   distDir?: string;
   logDir?: string;
   videoDir?: string;
+  /** Root of tournament folders (default bench-logs/tournaments). */
+  tournamentDir?: string;
+  /** Root of tournament videos (default videos/tournaments), served next to the leaderboard's match list. */
+  tournamentVideoDir?: string;
+  /** Start rendering a match's video as soon as it finishes (default: on, unless env STUDIO_AUTO_EXPORT=0). */
+  autoExport?: boolean;
+  /** Test hook: the exporter script spawned for video jobs (default: the real exporter next to this server). */
+  exporterPath?: string;
   /** Suppress the per-event console lines (used by tests). */
   quiet?: boolean;
   /** Pause between simulated generations in live viewers (ms). */
@@ -74,6 +84,8 @@ interface MatchSummary {
   rounds: number;
   p1HeartHp: number | null;
   p2HeartHp: number | null;
+  /** Real LLM spend so far in USD (sum of logged costUsd). */
+  costUsd: number;
   hasVideo: boolean;
 }
 
@@ -92,7 +104,10 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
   const distDir = resolve(options.distDir ?? 'dist');
   const logDir = options.logDir ?? LOG_DIR;
   const videoDir = options.videoDir ?? 'videos';
-  const exporterPath = join(__dirname, '..', 'video', 'export.js');
+  const tournamentDir = options.tournamentDir ?? TOURNAMENT_DIR;
+  const tournamentVideoDir = options.tournamentVideoDir ?? TOURNAMENT_VIDEO_DIR;
+  const autoExport = options.autoExport ?? process.env.STUDIO_AUTO_EXPORT !== '0';
+  const exporterPath = options.exporterPath ?? join(__dirname, '..', 'video', 'export.js');
   const hub = createEventHub();
   const jobs = new Map<string, ExportJob>();
   let current: CurrentMatch | null = null;
@@ -126,7 +141,8 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
     }
     const start = events.find(e => e.type === 'match_start');
     const end = events.find(e => e.type === 'match_end');
-    const invalid = events.find(e => e.type === 'match_invalid');
+    const invalid = events.find(e => e.type === 'match_invalid' || e.type === 'match_cost_cap');
+    const costUsd = events.reduce((sum, e) => sum + (e.type === 'turn' || e.type === 'llm_usage' ? Number(e.costUsd) || 0 : 0), 0);
     const lastRound = [...events].reverse().find(e => e.type === 'round_resolved');
     const running = current?.running === true && current.id === id;
     const winner = end?.winner;
@@ -141,6 +157,7 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
       rounds: Number(lastRound?.round ?? 0),
       p1HeartHp: lastRound ? Number(lastRound.p1HeartHp) : null,
       p2HeartHp: lastRound ? Number(lastRound.p2HeartHp) : null,
+      costUsd,
       hasVideo: existsSync(join(videoDir, `${id}.mp4`)),
     };
   };
@@ -163,6 +180,12 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
     const pauseSec = Number(body.roundPauseSec ?? 8);
     if (!Number.isFinite(pauseSec) || pauseSec < 0 || pauseSec > 120) {
       throw new HttpError(400, 'roundPauseSec must be between 0 and 120.');
+    }
+
+    let maxUsd: number | undefined;
+    if (body.maxUsd !== undefined && body.maxUsd !== null && body.maxUsd !== '') {
+      maxUsd = Number(body.maxUsd);
+      if (!Number.isFinite(maxUsd) || maxUsd <= 0) throw new HttpError(400, 'maxUsd must be a positive number.');
     }
 
     let controllers: { p1: PlayerController; p2: PlayerController };
@@ -195,6 +218,7 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
       simDelayMs: options.simDelayMs ?? 40,
       maxRounds,
       roundPauseMs: pauseSec * 1000,
+      maxUsd,
     })
       .then(result => {
         match.result = result;
@@ -205,6 +229,14 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
       })
       .finally(() => {
         match.running = false;
+        // A finished match (not an aborted / invalid / errored one) gets its video rendered right away, through the same job the Export button uses.
+        if (autoExport && match.result && !match.result.invalid && !match.result.aborted) {
+          try {
+            startExport(id);
+          } catch (err) {
+            logger.log({ type: 'video_export_error', reason: err instanceof Error ? err.message : String(err) });
+          }
+        }
       });
 
     return { id };
@@ -301,6 +333,37 @@ export function startStudio(options: StudioOptions): Promise<StudioHandle> {
     }
     if (path === '/api/live/events' && method === 'GET') {
       hub.attach(req, res);
+      return;
+    }
+
+    if (path === '/api/tournaments' && method === 'GET') {
+      sendJson(res, 200, { tournaments: listTournaments(tournamentDir) });
+      return;
+    }
+    if (path === '/api/leaderboard' && method === 'GET') {
+      try {
+        sendJson(res, 200, leaderboardResponse(url.searchParams.get('id'), tournamentDir, {}, tournamentVideoDir));
+      } catch (err) {
+        throw new HttpError(err instanceof TournamentNotFoundError ? 404 : 500, err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    const tourneyLog = path.match(/^\/api\/tournaments\/([\w.-]+)\/log\/([\w.-]+\.jsonl)$/);
+    if (tourneyLog && method === 'GET') {
+      const [, id, name] = tourneyLog;
+      const file = join(tournamentDir, id, name);
+      if (!isSafeId(id) || !isSafeId(name) || !existsSync(file)) throw new HttpError(404, 'Unknown match log.');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(readFileSync(file));
+      return;
+    }
+
+    const tourneyVideo = path.match(/^\/api\/tournaments\/([\w.-]+)\/video\/([\w.-]+\.mp4)$/);
+    if (tourneyVideo && method === 'GET') {
+      const [, id, name] = tourneyVideo;
+      const file = join(tournamentVideoDir, id, name);
+      if (!isSafeId(id) || !isSafeId(name) || !existsSync(file)) throw new HttpError(404, 'No video for that match.');
+      serveFile(req, res, file);
       return;
     }
 

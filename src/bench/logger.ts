@@ -33,6 +33,12 @@ function label(p: unknown): string {
   return x?.modelId ? `${x.provider}/${x.modelId}` : 'baseline bot';
 }
 
+/** " $0.0590 (match $0.1234)" for rows that carry a real call cost; empty otherwise. */
+function costSuffix(e: Record<string, unknown>): string {
+  if (typeof e.costUsd !== 'number' || typeof e.matchCostUsd !== 'number') return '';
+  return ` $${e.costUsd.toFixed(4)} (match $${e.matchCostUsd.toFixed(4)})`;
+}
+
 function summarize(e: Record<string, unknown>): string | null {
   switch (e.type) {
     case 'match_start':
@@ -50,10 +56,16 @@ function summarize(e: Record<string, unknown>): string | null {
               : `place ${a.preset ?? `custom(${a.cells?.length ?? 0} cells)`}@(${a.anchor?.join(',')})`;
       const verdict = r.ok ? 'ok' : `REJECTED: ${r.error}`;
       const why = typeof e.rationale === 'string' ? `\n        why: ${e.rationale.slice(0, 220)}` : '';
-      return `  R${e.round} P${e.playerId} call#${e.callIndex}${Number(e.batchSize) > 1 ? `.${Number(e.batchIndex) + 1}/${e.batchSize}` : ''} moves=${e.movesLeftBefore} ${what} -> ${verdict} (${e.latencyMs}ms)${why}`;
+      return `  R${e.round} P${e.playerId} call#${e.callIndex}${Number(e.batchSize) > 1 ? `.${Number(e.batchIndex) + 1}/${e.batchSize}` : ''} moves=${e.movesLeftBefore} ${what} -> ${verdict} (${e.latencyMs}ms)${costSuffix(e)}${why}`;
     }
     case 'attempt_failed':
       return `  !! P${e.playerId} call#${e.callIndex} attempt ${e.attempt}/${e.maxAttempts} failed after ${Math.round((e.elapsedMs as number) / 1000)}s: ${e.reason}${e.willRetry ? ` - retrying in ${Math.round(((e.retryInMs as number) ?? 0) / 1000)}s` : ' - giving up'}`;
+    case 'llm_usage':
+      return typeof e.costUsd === 'number' && e.costUsd > 0 ? `  $$ P${e.playerId} call#${e.callIndex} billed${costSuffix(e)}` : null;
+    case 'truncation_retry':
+      return `  !! P${e.playerId} call#${e.callIndex} truncated (finish_reason=length): retrying ONCE with max_tokens ${e.fromMaxTokens} -> ${e.toMaxTokens}`;
+    case 'match_cost_cap':
+      return `== MATCH STOPPED: cost cap reached ($${Number(e.totalCostUsd).toFixed(4)} >= $${Number(e.maxUsd).toFixed(2)}); no further LLM calls`;
     case 'llm_bad_response':
       return `  !! P${e.playerId} call#${e.callIndex} unusable model response: ${e.error}`;
     case 'match_invalid':

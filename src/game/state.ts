@@ -287,10 +287,25 @@ export class GameState {
     };
   }
 
+  /** End-of-round rule: every live cell of either owner inside either Heart zone is removed (Heart cells stay). */
+  private clearHeartZones(): void {
+    for (const p of this.players) {
+      const z = p.heartZone;
+      if (!p.heartPlaced || !z) continue;
+      for (let y = z.y; y < z.y + z.h; y++) {
+        for (let x = z.x; x < z.x + z.w; x++) {
+          const cell = this.grid.getCell(x, y);
+          if (cell?.alive && !cell.fixed) this.grid.removeCell(x, y);
+        }
+      }
+    }
+  }
+
   nextRound(): boolean {
     if (this.phase !== PHASE.RESOLVE && this.phase !== PHASE.GAMEOVER) return false;
     if (this.phase === PHASE.GAMEOVER) return false;
 
+    this.clearHeartZones();
     this.round++;
     this.phase = PHASE.BUILD;
     this.simulation = null;

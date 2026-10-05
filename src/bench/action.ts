@@ -79,15 +79,28 @@ export function applyBenchAction(
   }
 
   const newCells: [number, number][] = [];
+  const skipped: { x: number; y: number; reason: string }[] = [];
   for (const [dx, dy] of pattern.cells) {
     const cx = action.anchor[0] + dx;
     const cy = action.anchor[1] + dy;
-    if (!state.grid.getCell(cx, cy)?.alive) newCells.push([cx, cy]);
+    const there = state.grid.getCell(cx, cy);
+    if (!there?.alive) newCells.push([cx, cy]);
+    else {
+      const reason = there.fixed ? 'your Heart cell' : there.owner === (playerId === 1 ? 'p1' : 'p2') ? 'already one of your live cells' : 'an enemy cell is there';
+      skipped.push({ x: cx, y: cy, reason });
+    }
   }
   const placed = state.stampPattern(action.anchor[0], action.anchor[1], pattern, playerId);
-  return placed
-    ? { ok: true, placedCells: newCells }
-    : { ok: false, error: explainFailure(state, playerId, pattern, action.anchor, 'pattern') };
+  if (!placed) return { ok: false, error: explainFailure(state, playerId, pattern, action.anchor, 'pattern') };
+  if (skipped.length === 0) return { ok: true, placedCells: newCells };
+  const total = pattern.cells.length;
+  const list = skipped.map(s => `(${s.x}, ${s.y}) ${s.reason}`).join('; ');
+  return {
+    ok: true,
+    placedCells: newCells,
+    partial: { placed: newCells.length, total, skipped },
+    warning: `${pattern.name} at (${action.anchor[0]}, ${action.anchor[1]}): placed ${newCells.length}/${total}, skipped ${list}. The result is NOT the full shape and will not behave like ${pattern.name}.`,
+  };
 }
 
 /**

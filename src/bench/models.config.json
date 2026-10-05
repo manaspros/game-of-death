@@ -34,5 +34,325 @@
     "modelId": "meta-llama/llama-3.3-70b-instruct:free",
     "nativeToolCalling": true,
     "notes": "OpenRouter :free variants rotate without notice. Verify at openrouter.ai/models?max_price=0 and edit modelId as needed."
+  },
+  {
+    "key": "litellm-gpt-4o-mini",
+    "provider": "litellm",
+    "modelId": "gpt-4o-mini",
+    "nativeToolCalling": true,
+    "maxTokens": 1500,
+    "inputPricePerM": 0.15,
+    "outputPricePerM": 0.6,
+    "notes": "Non-reasoning; probe: tool call OK at 300 tokens (250 used)."
+  },
+  {
+    "key": "litellm-gpt-4.1-mini",
+    "provider": "litellm",
+    "modelId": "gpt-4.1-mini",
+    "nativeToolCalling": true,
+    "maxTokens": 1500,
+    "inputPricePerM": 0.4,
+    "outputPricePerM": 1.6,
+    "notes": "Non-reasoning; probe: tool call OK at 300 tokens (220 used)."
+  },
+  {
+    "key": "litellm-gpt-6-luna",
+    "provider": "litellm",
+    "modelId": "gpt-6-luna",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 0.1,
+    "outputPricePerM": 0.5,
+    "notes": "Probe 2026-10-04: high = 4399 completion (3965 reasoning), 30s, $0.0028/move; low = 1264, 11s. Cheap tier, so HIGH."
+  },
+  {
+    "key": "litellm-claude-haiku-4-5",
+    "provider": "litellm",
+    "modelId": "claude-haiku-4-5",
+    "nativeToolCalling": true,
+    "maxTokens": 16000,
+    "maxTokensCeiling": 32000,
+    "timeoutMs": 180000,
+    "extraBody": {
+      "reasoning_effort": "high",
+      "temperature": 1
+    },
+    "inputPricePerM": 1,
+    "outputPricePerM": 5,
+    "notes": "Bedrock. Probe: high = 2897 completion (1815 reasoning), 27s, $0.021/move. Cheap tier, so HIGH."
+  },
+  {
+    "key": "litellm-gemini-3.5-flash",
+    "provider": "litellm",
+    "modelId": "gemini-3.5-flash",
+    "nativeToolCalling": true,
+    "maxTokens": 16000,
+    "maxTokensCeiling": 32000,
+    "timeoutMs": 120000,
+    "extraBody": {
+      "reasoning_effort": "high"
+    },
+    "inputPricePerM": 1.5,
+    "outputPricePerM": 9,
+    "notes": "Probe: high = 5020 completion (4483 reasoning), 26s, $0.053/move. Proxy limit 2000 RPM / 800K TPM (tightest; about 80 moves/min). Cheap tier, so HIGH."
+  },
+  {
+    "key": "litellm-deepseek-v4.1-flash",
+    "provider": "litellm",
+    "modelId": "deepseek/deepseek-v4.1-flash",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 0.02,
+    "outputPricePerM": 0.396,
+    "notes": "OpenRouter. Probe: high = 13372 completion (12325 reasoning), 127s, $0.0064/move; effort barely changes depth. reasoning_effort=none gives runaway analysis and an invalid call, so do not use it. Slow but cheap."
+  },
+  {
+    "key": "litellm-glm-5.3-flash",
+    "provider": "litellm",
+    "modelId": "z-ai/glm-5.3-flash",
+    "nativeToolCalling": true,
+    "maxTokens": 16000,
+    "maxTokensCeiling": 32000,
+    "timeoutMs": 300000,
+    "extraBody": {
+      "reasoning_effort": "high"
+    },
+    "inputPricePerM": 0.15,
+    "outputPricePerM": 0.5,
+    "notes": "OpenRouter. Works with reasoning_effort (thinking cannot be disabled; the old thinking.disabled setting was ignored and default effort max burned the budget). Probe: high = 4175 completion (2993 reasoning), 32s, $0.0029/move; 36-60s under 3 parallel calls."
+  },
+  {
+    "key": "litellm-kimi-k2.5",
+    "provider": "litellm",
+    "modelId": "kimi-k2.5",
+    "nativeToolCalling": true,
+    "maxTokens": 8000,
+    "maxTokensCeiling": 16000,
+    "timeoutMs": 60000,
+    "inputPricePerM": 0.6,
+    "outputPricePerM": 3.03,
+    "notes": "Bedrock, no reasoning. Probe: 118-791 completion, 1-5s, $0.004-0.0065/move. No reasoning_effort sent (not needed)."
+  },
+  {
+    "key": "litellm-glm-5",
+    "provider": "litellm",
+    "modelId": "z-ai/glm-5",
+    "nativeToolCalling": true,
+    "maxTokens": 8000,
+    "maxTokensCeiling": 16000,
+    "timeoutMs": 60000,
+    "inputPricePerM": 1,
+    "outputPricePerM": 3.2,
+    "notes": "Bedrock. Probe: 686-987 completion, 5-11s, $0.008/move. Reasoning params are accepted but report 0 reasoning tokens, so no reasoning_effort is sent."
+  },
+  {
+    "key": "litellm-grok-4.1-fast",
+    "provider": "litellm",
+    "modelId": "grok-4-1-fast-reasoning",
+    "nativeToolCalling": true,
+    "maxTokens": 8000,
+    "maxTokensCeiling": 16000,
+    "timeoutMs": 90000,
+    "inputPricePerM": 0.2,
+    "outputPricePerM": 0.5,
+    "notes": "xAI direct. Probe: 714 completion (406 reasoning), 8s, $0.0085/move with no effort param. reasoning_effort not verified for this model, so omitted. LiteLLM /model/info reports 0 prices; 0.2/0.5 is xAI's published grok-4-fast rate (assumption, verify)."
+  },
+  {
+    "key": "litellm-deepseek-v3.2",
+    "provider": "litellm",
+    "modelId": "deepseek.v3.2",
+    "nativeToolCalling": true,
+    "maxTokens": 4000,
+    "maxTokensCeiling": 8000,
+    "timeoutMs": 60000,
+    "inputPricePerM": 0.74,
+    "outputPricePerM": 2.22,
+    "notes": "Bedrock, non-thinking. Probe: 82-498 completion, 2-5s, $0.0044-0.0053/move. No effort param."
+  },
+  {
+    "key": "litellm-gpt-6-sol",
+    "provider": "litellm",
+    "modelId": "gpt-6-sol",
+    "nativeToolCalling": true,
+    "maxTokens": 16000,
+    "maxTokensCeiling": 32000,
+    "timeoutMs": 120000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 10,
+    "notes": "Probe: medium = 2115 completion (1519 reasoning), 19s, $0.034/move. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-gpt-6.1-sol",
+    "provider": "litellm",
+    "modelId": "gpt-6.1-sol",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 10,
+    "notes": "Probe: medium = 964 completion (352 reasoning), 19s, $0.022/move. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-gpt-5.6-terra",
+    "provider": "litellm",
+    "modelId": "gpt-5.6-terra",
+    "nativeToolCalling": true,
+    "maxTokens": 16000,
+    "maxTokensCeiling": 32000,
+    "timeoutMs": 120000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 12,
+    "notes": "Probe: medium = 1496 completion (753 reasoning), 18s, $0.030/move. Limit 15000 RPM / 40M TPM. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-claude-opus-5-5",
+    "provider": "litellm",
+    "modelId": "claude-opus-5-5",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 4,
+    "outputPricePerM": 20,
+    "notes": "Azure. Probe: medium = 833 completion (438 reasoning), 11.5s, $0.048/move. Returned finish_reason=content_filter (0 tokens, still billed) with the old analysis description; works with the neutral wording now in tools.ts. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-claude-sonnet-5-5",
+    "provider": "litellm",
+    "modelId": "claude-sonnet-5-5",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 10,
+    "notes": "Azure. Probe: medium = 214 completion, 0 reasoning tokens, 3.7s, $0.019/move (high = 1104 completion, 10s). Effort is accepted and effective, medium barely reasons. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-gemini-3.1-pro",
+    "provider": "litellm",
+    "modelId": "gemini-3.1-pro-preview",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 400000,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 12,
+    "notes": "Probe: medium = 1610 completion (1156 reasoning), 18s, $0.030/move. Proxy limit 2000 RPM / 800K TPM. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-kimi-k3",
+    "provider": "litellm",
+    "modelId": "kimi-k3",
+    "nativeToolCalling": true,
+    "maxTokens": 32000,
+    "maxTokensCeiling": 48000,
+    "timeoutMs": 900000,
+    "extraBody": {
+      "reasoning_effort": "high"
+    },
+    "inputPricePerM": 3,
+    "outputPricePerM": 15,
+    "notes": "OpenRouter. Old failures came from the default reasoning_effort=max (always-on thinking). Probe: medium = 590-720 completion (184-311 reasoning), 28-30s, $0.018-0.024/move; high = 3599 completion, 108s. Docs list low/high/max; medium is accepted via OpenRouter but its mapping is unverified. temperature 0.3 accepted without error. Expensive tier, so MEDIUM. TOURNAMENT: medium is not a Kimi level (low/high/max) and ran away to 32k+ tokens -> set to high (Kimi middle level) + stream + 900s.",
+    "stream": true
+  },
+  {
+    "key": "litellm-glm-5.2",
+    "provider": "litellm",
+    "modelId": "z-ai/glm-5.2",
+    "nativeToolCalling": true,
+    "maxTokens": 40000,
+    "maxTokensCeiling": 64000,
+    "timeoutMs": 900000,
+    "stream": true,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 1.4,
+    "outputPricePerM": 4.4,
+    "notes": "OpenRouter. SLOW and effort barely changes depth: medium = 5241-6294 reasoning, 107-112s, $0.013-0.047/move; one low non-stream call timed out at 170s, hence the long timeout. Real round-2 prompts: ~20k reasoning tokens at ~52 tok/s = ~395s non-stream, so 290s timed out. Streamed (SSE) with a 600s timeout. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-grok-4.6",
+    "provider": "litellm",
+    "modelId": "xai/grok-4.6",
+    "nativeToolCalling": true,
+    "maxTokens": 40000,
+    "maxTokensCeiling": 64000,
+    "timeoutMs": 900000,
+    "stream": true,
+    "extraBody": {
+      "reasoning_effort": "medium"
+    },
+    "inputPricePerM": 2,
+    "outputPricePerM": 6,
+    "notes": "xAI direct. Reasoning cannot be disabled; the old hangs were the default effort high. Probe: medium = 5636-6214 completion (4902-5679 reasoning), 89-96s, $0.045-0.05/move; low = 16-29s, $0.02. Real round-2 prompts: ~24k reasoning tokens at ~60 tok/s = ~400s (round 1 ~150s), so 240s timed out. Streamed (SSE) with a 600s timeout. Expensive tier, so MEDIUM."
+  },
+  {
+    "key": "litellm-qwen3-235b",
+    "provider": "litellm",
+    "modelId": "Qwen3-235B-A22B-Instruct-2507",
+    "nativeToolCalling": true,
+    "maxTokens": 3000,
+    "timeoutMs": 120000,
+    "inputPricePerM": 0.22,
+    "outputPricePerM": 0.88,
+    "notes": "Non-thinking instruct (Qwen3-235B-A22B-Instruct-2507). Probe: 229-290 completion, 2-3s, $0.0014/move. No reasoning param (reasoning_effort ignored)."
+  },
+  {
+    "key": "litellm-qwen3-32b",
+    "provider": "litellm",
+    "modelId": "Qwen3-32B",
+    "nativeToolCalling": true,
+    "maxTokens": 3000,
+    "timeoutMs": 120000,
+    "extraBody": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "inputPricePerM": 0.15,
+    "outputPricePerM": 0.6,
+    "notes": "enable_thinking=false; probe 134 completion, 1.3s."
+  },
+  {
+    "key": "litellm-qwen3-coder-30b",
+    "provider": "litellm",
+    "modelId": "Qwen3-Coder-30B-A3B-Instruct",
+    "nativeToolCalling": true,
+    "maxTokens": 4000,
+    "timeoutMs": 120000,
+    "inputPricePerM": 0.15,
+    "outputPricePerM": 0.6,
+    "notes": "Non-thinking; probes 1315-1802 completion, ~4s."
   }
 ]

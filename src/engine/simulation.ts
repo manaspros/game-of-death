@@ -1,6 +1,7 @@
 import { Cell } from './cell';
 import { Grid } from './grid';
-import { determineOwner, HEART_DAMAGE_CAP_PER_GEN, shouldSurvive } from './rules';
+import { birthOwner, HEART_DAMAGE_CELL_CAP_PER_GEN, HEART_DAMAGE_PER_CELL, shouldSurvive } from './rules';
+import type { Owner } from './types';
 import type { PlayerState } from '../game/player';
 
 export class Simulation {
@@ -44,27 +45,27 @@ export class Simulation {
           continue;
         }
 
-        let aliveCount = 0;
+        // Each owner follows Life on its own cells: only live neighbors of the same owner count.
+        const counts: Record<Owner, number> = { p1: 0, p2: 0, neutral: 0 };
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (dx === 0 && dy === 0) continue;
             const n = src.getCell(x + dx, y + dy);
-            if (n?.alive && !n.fixed) aliveCount++;
+            if (n?.alive && !n.fixed) counts[n.owner ?? 'neutral']++;
           }
         }
 
         if (cell.alive) {
           if (cell.isExpired(gen, maxAge)) {
             dst.setCell(x, y, new Cell());
-          } else if (shouldSurvive(cell, aliveCount)) {
+          } else if (shouldSurvive(cell, counts[cell.owner ?? 'neutral'])) {
             dst.setCell(x, y, cell.clone());
           } else {
             dst.setCell(x, y, new Cell());
           }
         } else {
-          if (aliveCount === 3) {
-            const neighbors = src.getNeighbors(x, y).filter(n => !n.fixed);
-            const owner = determineOwner(neighbors);
+          const owner = birthOwner(counts);
+          if (owner) {
             dst.setCell(x, y, Cell.create(owner, gen));
           } else {
             dst.setCell(x, y, new Cell());
@@ -75,33 +76,12 @@ export class Simulation {
 
     this.resolveCollisions(dst);
 
-    for (let y = 0; y < dst.height; y++) {
-      for (let x = 0; x < dst.width; x++) {
-        const cell = dst.getCell(x, y);
-        if (!cell?.alive) continue;
-
-        if (this.p1.heartZone && this.p1.heartPlaced) {
-          const hz = this.p1.heartZone;
-          if (x >= hz.x && x < hz.x + hz.w && y >= hz.y && y < hz.y + hz.h) {
-            if (cell.owner === 'p2') {
-              p1Dmg++;
-            }
-          }
-        }
-
-        if (this.p2.heartZone && this.p2.heartPlaced) {
-          const hz = this.p2.heartZone;
-          if (x >= hz.x && x < hz.x + hz.w && y >= hz.y && y < hz.y + hz.h) {
-            if (cell.owner === 'p1') {
-              p2Dmg++;
-            }
-          }
-        }
-      }
-    }
-
-    p1Dmg = Math.min(p1Dmg, HEART_DAMAGE_CAP_PER_GEN);
-    p2Dmg = Math.min(p2Dmg, HEART_DAMAGE_CAP_PER_GEN);
+    // Hit once, then die: every enemy cell inside a Heart zone deals HEART_DAMAGE_PER_CELL damage (at most
+    // HEART_DAMAGE_CELL_CAP_PER_GEN cells count per generation) and all of them are removed this generation.
+    const p1Hit = this.p1.heartPlaced ? this.removeInvaders(dst, this.p1.heartZone, 'p2') : 0;
+    const p2Hit = this.p2.heartPlaced ? this.removeInvaders(dst, this.p2.heartZone, 'p1') : 0;
+    p1Dmg = Math.min(p1Hit, HEART_DAMAGE_CELL_CAP_PER_GEN) * HEART_DAMAGE_PER_CELL;
+    p2Dmg = Math.min(p2Hit, HEART_DAMAGE_CELL_CAP_PER_GEN) * HEART_DAMAGE_PER_CELL;
     this.p1.heartHp = Math.max(0, this.p1.heartHp - p1Dmg);
     this.p2.heartHp = Math.max(0, this.p2.heartHp - p2Dmg);
     this.p1HeartDamage += p1Dmg;
@@ -112,6 +92,22 @@ export class Simulation {
     this.buffer = tmp;
     this.generation = gen;
     return this.current;
+  }
+
+  /** Remove every live cell of `owner` inside `zone` (Heart cells are never touched); returns how many there were. */
+  private removeInvaders(grid: Grid, zone: { x: number; y: number; w: number; h: number } | null, owner: Owner): number {
+    if (!zone) return 0;
+    let count = 0;
+    for (let y = zone.y; y < zone.y + zone.h; y++) {
+      for (let x = zone.x; x < zone.x + zone.w; x++) {
+        const cell = grid.getCell(x, y);
+        if (cell?.alive && !cell.fixed && cell.owner === owner) {
+          count++;
+          grid.setCell(x, y, new Cell());
+        }
+      }
+    }
+    return count;
   }
 
   private resolveCollisions(grid: Grid): void {

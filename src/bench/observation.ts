@@ -52,6 +52,8 @@ export function serializeObservation(
     if (!fixed && owner === ownOwner) yourCellsThere.push([x, y]);
   });
 
+  const ownHeartCells = you.heartPlaced ? heartCells(state.grid, ownZone, ownOwner) : [];
+  const oppHeartCells = seenGrid ? heartCells(seenGrid, oppZone, oppOwner) : [];
   const ownBox = you.heartPlaced && you.heartZone ? you.heartZone : null;
   const oppBox = seenGrid ? heartBox(seenGrid, oppZone, oppOwner) : null;
   const inside = (box: Zone | null, cells: CellXY[]) =>
@@ -61,6 +63,7 @@ export function serializeObservation(
     round: state.round,
     maxRounds: state.maxRounds,
     generationsPerRound: state.preset.generationsPerRound,
+    cellMaxAge: state.preset.cellMaxAge,
     board: { width: state.grid.width, height: state.grid.height },
     phase: state.phase,
     visibilityMode: state.visibility,
@@ -72,6 +75,7 @@ export function serializeObservation(
       heartHp: you.heartHp,
       heartPlaced: you.heartPlaced,
       heartZone: you.heartPlaced && you.heartZone ? { ...you.heartZone } : null,
+      heartCells: ownHeartCells,
       buildZone: { ...ownZone },
       blueprints: book ? book.list() : [],
       anchorRanges: anchorRanges(ownZone, you.heartPlaced, book),
@@ -82,6 +86,7 @@ export function serializeObservation(
     opponent: {
       heartHp: opponent.heartHp,
       heartZone: oppBox,
+      heartCells: oppHeartCells,
       buildZone: { ...oppZone },
       visibleCells,
       yourCellsThere,
@@ -99,6 +104,15 @@ function forEachLive(grid: Grid, zone: Zone, visit: (x: number, y: number, owner
       if (cell?.alive) visit(x, y, cell.owner ?? 'neutral', cell.fixed);
     }
   }
+}
+
+/** The squares of an owner's fixed (Heart) cells inside a zone, row by row. */
+function heartCells(grid: Grid, zone: Zone, owner: Owner): CellXY[] {
+  const out: CellXY[] = [];
+  forEachLive(grid, zone, (x, y, cellOwner, fixed) => {
+    if (fixed && cellOwner === owner) out.push([x, y]);
+  });
+  return out;
 }
 
 /** Bounding box of an owner's fixed (Heart) cells inside a zone, or null if there are none. */

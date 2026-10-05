@@ -29,13 +29,17 @@ async function main(): Promise<void> {
   console.log(`Logging to ${logPath}`);
 
   const roundPauseMs = Number(process.env.BENCH_ROUND_PAUSE_SEC || 8) * 1000;
-  const result = await runMatch(preset, p1, p2, logger, { simDelayMs: spectator ? 40 : 0, roundPauseMs });
+  const maxRounds = process.env.BENCH_MAX_ROUNDS ? Number(process.env.BENCH_MAX_ROUNDS) : undefined;
+  const result = await runMatch(preset, p1, p2, logger, { simDelayMs: spectator ? 40 : 0, roundPauseMs, maxRounds });
 
   if (result.invalid) {
     console.error(`\nMATCH INVALID - not scoreable. P${result.invalid.playerId}'s provider failed:\n  ${result.invalid.reason}`);
     process.exitCode = 2;
   } else {
+    if (result.costCap) console.error(`
+MATCH STOPPED at the USD cap (BENCH_MATCH_MAX_USD): not scoreable.`);
     console.log('Match finished:', result);
+    console.log(`Match cost: $${(result.costUsd ?? 0).toFixed(4)}`);
   }
   console.log(`Review it with: npm run summary -- ${logPath}`);
   if (spectator) console.log('Spectator feed still up so the page can show the final state. Ctrl+C to exit.');
