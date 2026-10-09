@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/tournaments", "destination": "/data/tournaments.json" },
+    { "source": "/api/leaderboard", "destination": "/data/frontier-5r-2026-10-04/leaderboard.json" },
+    { "source": "/api/tournaments/:id/log/:name", "destination": "/data/:id/log/:name" }
+  ]
+}

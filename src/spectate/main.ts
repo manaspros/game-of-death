@@ -7,6 +7,13 @@ type BenchEvent = { type: string } & Record<string, unknown>;
 const params = new URLSearchParams(location.search);
 const feedUrl = params.get('feed') ?? `http://127.0.0.1:${params.get('port') ?? '8787'}/events`;
 
+// Static deploys (e.g. Vercel) have no live bench to stream from: show a recorded match instead.
+const isLocalHost = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+if (!isLocalHost && !params.has('feed')) {
+  const log = '/api/tournaments/frontier-5r-2026-10-04/log/match-6-litellm-claude-opus-5-5-vs-litellm-gemini-3.1-pro.jsonl';
+  location.replace(`/replay.html?log=${encodeURIComponent(log)}&play=1`);
+}
+
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
   if (!node) throw new Error(`Missing #${id}`);
