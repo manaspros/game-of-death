@@ -68,7 +68,8 @@
     },
     "inputPricePerM": 0.1,
     "outputPricePerM": 0.5,
-    "notes": "Probe 2026-10-04: high = 4399 completion (3965 reasoning), 30s, $0.0028/move; low = 1264, 11s. Cheap tier, so HIGH."
+    "notes": "Probe 2026-10-04: high = 4399 completion (3965 reasoning), 30s, $0.0028/move; low = 1264, 11s. Cheap tier, so HIGH.",
+    "stream": true
   },
   {
     "key": "litellm-claude-haiku-4-5",
@@ -207,7 +208,8 @@
     },
     "inputPricePerM": 2,
     "outputPricePerM": 10,
-    "notes": "Probe: medium = 964 completion (352 reasoning), 19s, $0.022/move. Expensive tier, so MEDIUM."
+    "notes": "Probe: medium = 964 completion (352 reasoning), 19s, $0.022/move. Expensive tier, so MEDIUM.",
+    "stream": true
   },
   {
     "key": "litellm-gpt-5.6-terra",
@@ -237,7 +239,8 @@
     },
     "inputPricePerM": 4,
     "outputPricePerM": 20,
-    "notes": "Azure. Probe: medium = 833 completion (438 reasoning), 11.5s, $0.048/move. Returned finish_reason=content_filter (0 tokens, still billed) with the old analysis description; works with the neutral wording now in tools.ts. Expensive tier, so MEDIUM."
+    "notes": "Azure. Probe: medium = 833 completion (438 reasoning), 11.5s, $0.048/move. Returned finish_reason=content_filter (0 tokens, still billed) with the old analysis description; works with the neutral wording now in tools.ts. Expensive tier, so MEDIUM.",
+    "stream": true
   },
   {
     "key": "litellm-claude-sonnet-5-5",
@@ -252,7 +255,8 @@
     },
     "inputPricePerM": 2,
     "outputPricePerM": 10,
-    "notes": "Azure. Probe: medium = 214 completion, 0 reasoning tokens, 3.7s, $0.019/move (high = 1104 completion, 10s). Effort is accepted and effective, medium barely reasons. Expensive tier, so MEDIUM."
+    "notes": "Azure. Probe: medium = 214 completion, 0 reasoning tokens, 3.7s, $0.019/move (high = 1104 completion, 10s). Effort is accepted and effective, medium barely reasons. Expensive tier, so MEDIUM.",
+    "stream": true
   },
   {
     "key": "litellm-gemini-3.1-pro",

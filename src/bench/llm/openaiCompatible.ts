@@ -2,7 +2,7 @@ import type { Observation } from '../types';
 import { ModelResponseError } from './errors';
 import { postJsonWithRetry } from './http';
 import { reservationUsd, resolveCost, type Prices } from './pricing';
-import { buildUserMessage, checkRequiredFields, extractAnalysis, extractNotes, extractRationale, SYSTEM_PROMPT, TOOL_DEFS, toolCallToActions } from './tools';
+import { activeSystemPrompt, buildUserMessage, checkRequiredFields, extractAnalysis, extractNotes, extractRationale, TOOL_DEFS, toolCallToActions } from './tools';
 import type { MinIntervalLimiter } from './rateLimiter';
 import { RAW_ARGS_LOG_CHARS, type CallHooks, type LLMCallResult, type LLMClient } from './types';
 
@@ -85,7 +85,7 @@ export class OpenAICompatibleClient implements LLMClient {
       ...this.extraBody,
       ...(this.stream ? { stream: true, stream_options: { include_usage: true } } : {}),
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: activeSystemPrompt() },
         { role: 'user', content: buildUserMessage(observation, availablePresets, previousRejection) },
       ],
     });

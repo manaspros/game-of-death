@@ -4,6 +4,7 @@ import type { PresetName } from '../engine/types';
 import { requireEnv } from './config';
 import { createClient, getModelEntry } from './llm/registry';
 import type { CostGate } from './llm/types';
+import { isPromptVariant, PROMPT_VARIANTS, setPromptVariant, type PromptVariant } from './llm/tools';
 import { createFileLogger, type MatchLogger } from './logger';
 import { exportVideo, videoExportProblem } from './video/export';
 import { runMatch, type MatchResult, type PlayerController } from './match';
@@ -28,6 +29,33 @@ export interface Fixture {
 
 export type Seat = { p1: number; p2: number };
 
+/** Why a seat's calls went wrong in one match, by cause. */
+export interface FailureCounts {
+  /** Actions the game rejected (bad anchor, outside the zone, Heart placed twice, ...). */
+  illegalAction: number;
+  /** Unusable responses cut off by max_tokens (runaway reasoning), after the client's own retry. */
+  truncated: number;
+  /** Unusable responses with no tool call at all, after the client's own retry. */
+  noToolCall: number;
+  /** Other unusable responses (bad JSON, missing required fields), after the client's own retry. */
+  malformedCall: number;
+  /** Accepted calls that left analysis / rationale / notes empty. */
+  missingProse: number;
+  /** Single HTTP attempts that failed (timeout, 429, 5xx, unusable response) and were retried or given up on. */
+  failedAttempts: number;
+  /** Moves left unspent when the turn was force-submitted. */
+  unspentMoves: number;
+}
+
+export const FAILURE_KINDS = ['illegalAction', 'truncated', 'noToolCall', 'malformedCall', 'missingProse', 'failedAttempts', 'unspentMoves'] as const satisfies readonly (keyof FailureCounts)[];
+
+/** Token use of one seat split by kind. completion includes hidden reasoning for providers that bill it as output; thought is only set where reported apart (Gemini). */
+export interface TokenDetail {
+  prompt: number;
+  completion: number;
+  thought: number;
+}
+
 /** One line of results.jsonl. Consumed by the leaderboard and web page: keep the shape stable. */
 export interface TournamentRow {
   index: number;
@@ -50,6 +78,12 @@ export interface TournamentRow {
   costUsd?: { p1: number; p2: number };
   invalidCalls: Seat;
   autoSkips: Seat;
+  /** Per-seat failure causes. Absent in rows written before failure tracking. */
+  failures?: { p1: FailureCounts; p2: FailureCounts };
+  /** Per-seat token split. Absent in rows written before token tracking. */
+  tokenDetail?: { p1: TokenDetail; p2: TokenDetail };
+  /** System prompt variant the match was played under. Absent = 'default'. */
+  promptVariant?: PromptVariant;
   logFile: string;
   finishedAt: string;
 }
@@ -91,6 +125,19 @@ interface LogStats {
   costUsd: { p1: number; p2: number };
   invalidCalls: Seat;
   autoSkips: Seat;
+  failures: { p1: FailureCounts; p2: FailureCounts };
+  tokenDetail: { p1: TokenDetail; p2: TokenDetail };
+}
+
+const noFailures = (): FailureCounts => ({ illegalAction: 0, truncated: 0, noToolCall: 0, malformedCall: 0, missingProse: 0, failedAttempts: 0, unspentMoves: 0 });
+const noTokens = (): TokenDetail => ({ prompt: 0, completion: 0, thought: 0 });
+
+/** Sorts an unusable-response log row into its cause (the messages come from the clients' response parsers). */
+function badResponseKind(e: LogEvent): 'truncated' | 'noToolCall' | 'malformedCall' {
+  const msg = typeof e.error === 'string' ? e.error : '';
+  if (e.finishReason === 'length' || /truncated/i.test(msg)) return 'truncated';
+  if (/no tool call|no function call/i.test(msg)) return 'noToolCall';
+  return 'malformedCall';
 }
 
 /**
@@ -98,23 +145,42 @@ interface LogStats {
  *  - tokens: promptTokens + completionTokens + thoughtTokens on `turn` rows (call-level, stored on the first action),
  *    plus the same fields on `llm_usage` rows (billed calls that produced no turn row: unusable responses, empty or discarded calls),
  *  - invalidCalls: `turn` rows whose applyResult.ok is false, plus `llm_bad_response` rows,
- *  - autoSkips: `auto_skip` rows.
+ *  - autoSkips: `auto_skip` rows,
+ *  - failures: the same invalid calls split by cause, plus `missing_fields_warning`, `attempt_failed` and `force_submit` (unspent moves) rows,
+ *  - tokenDetail: the token sum split into prompt / completion / thought.
  */
 export function statsFromLog(events: LogEvent[]): LogStats {
-  const s: LogStats = { tokens: { p1: 0, p2: 0 }, costUsd: { p1: 0, p2: 0 }, invalidCalls: { p1: 0, p2: 0 }, autoSkips: { p1: 0, p2: 0 } };
+  const s: LogStats = {
+    tokens: { p1: 0, p2: 0 },
+    costUsd: { p1: 0, p2: 0 },
+    invalidCalls: { p1: 0, p2: 0 },
+    autoSkips: { p1: 0, p2: 0 },
+    failures: { p1: noFailures(), p2: noFailures() },
+    tokenDetail: { p1: noTokens(), p2: noTokens() },
+  };
   const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   for (const e of events) {
     const seat = e.playerId === 1 ? 'p1' : e.playerId === 2 ? 'p2' : null;
     if (!seat) continue;
-    if (e.type === 'llm_usage') {
+    if (e.type === 'llm_usage' || e.type === 'turn') {
       s.tokens[seat] += n(e.promptTokens) + n(e.completionTokens) + n(e.thoughtTokens);
+      s.tokenDetail[seat].prompt += n(e.promptTokens);
+      s.tokenDetail[seat].completion += n(e.completionTokens);
+      s.tokenDetail[seat].thought += n(e.thoughtTokens);
       s.costUsd[seat] += n(e.costUsd);
-    } else if (e.type === 'turn') {
-      s.tokens[seat] += n(e.promptTokens) + n(e.completionTokens) + n(e.thoughtTokens);
-      s.costUsd[seat] += n(e.costUsd);
-      if ((e.applyResult as { ok?: boolean } | undefined)?.ok === false) s.invalidCalls[seat]++;
-    } else if (e.type === 'llm_bad_response') s.invalidCalls[seat]++;
-    else if (e.type === 'auto_skip') s.autoSkips[seat]++;
+    }
+    if (e.type === 'turn') {
+      if ((e.applyResult as { ok?: boolean } | undefined)?.ok === false) {
+        s.invalidCalls[seat]++;
+        s.failures[seat].illegalAction++;
+      }
+    } else if (e.type === 'llm_bad_response') {
+      s.invalidCalls[seat]++;
+      s.failures[seat][badResponseKind(e)]++;
+    } else if (e.type === 'auto_skip') s.autoSkips[seat]++;
+    else if (e.type === 'missing_fields_warning') s.failures[seat].missingProse++;
+    else if (e.type === 'attempt_failed') s.failures[seat].failedAttempts++;
+    else if (e.type === 'force_submit') s.failures[seat].unspentMoves += n(e.movesLeft);
   }
   return s;
 }
@@ -163,6 +229,8 @@ export interface TournamentOptions {
   roundPauseMs?: number;
   /** Stop after this many newly played matches (used to exercise resume). */
   maxMatches?: number;
+  /** System prompt variant every model plays under (default 'default'). Saved in meta.json: one tournament id = one variant. */
+  promptVariant?: PromptVariant;
   /** Suppress progress output. */
   quiet?: boolean;
 }
@@ -225,6 +293,8 @@ export interface TournamentMeta {
   preset: string;
   /** null = the preset's own round count. */
   maxRounds: number | null;
+  /** Absent in meta.json files written before prompt variants = 'default'. */
+  promptVariant?: PromptVariant;
 }
 
 /** Throws a clear error when the saved settings differ from the current ones. */
@@ -236,6 +306,7 @@ export function assertMetaMatches(saved: unknown, current: TournamentMeta, id: s
   if (s.maxRounds !== current.maxRounds) diffs.push(`maxRounds ${show(s.maxRounds)} -> ${show(current.maxRounds)}`);
   if (s.gamesPerPair !== current.gamesPerPair) diffs.push(`games per pair ${show(s.gamesPerPair)} -> ${show(current.gamesPerPair)}`);
   if (JSON.stringify(s.models) !== JSON.stringify(current.models)) diffs.push(`models ${show(s.models)} -> ${show(current.models)}`);
+  if ((s.promptVariant ?? 'default') !== (current.promptVariant ?? 'default')) diffs.push(`prompt variant ${s.promptVariant ?? 'default'} -> ${current.promptVariant ?? 'default'}`);
   if (diffs.length > 0) {
     throw new Error(`Cannot resume tournament "${id}": its settings changed since it started (${diffs.join('; ')}). Use the original settings or a new TOURNEY_ID.`);
   }
@@ -270,7 +341,8 @@ export async function runTournament(opts: TournamentOptions): Promise<Tournament
       );
     }
   }
-  const meta: TournamentMeta = { version: 1, models: opts.models, gamesPerPair: evenGames(opts.gamesPerPair), preset: opts.preset, maxRounds: opts.maxRounds ?? null };
+  const promptVariant = opts.promptVariant ?? 'default';
+  const meta: TournamentMeta = { version: 1, models: opts.models, gamesPerPair: evenGames(opts.gamesPerPair), preset: opts.preset, maxRounds: opts.maxRounds ?? null, promptVariant };
   const metaFile = join(dir, 'meta.json');
   // Written exactly once (flag 'wx'): of several workers starting together one creates it, the others validate against it.
   let created = false;
@@ -307,7 +379,8 @@ export async function runTournament(opts: TournamentOptions): Promise<Tournament
   for (const key of opts.models) controllers.set(key, opts.createController(key));
 
   const outcome: TournamentOutcome = { rows: [], skipped: 0, stoppedForBudget: false, totalTokens, totalUsd };
-  log(`Tournament ${opts.id}: ${opts.models.length} models, ${schedule.length} matches, preset "${opts.preset}"` +
+  setPromptVariant(promptVariant);
+  log(`Tournament ${opts.id}: ${opts.models.length} models, ${schedule.length} matches, preset "${opts.preset}", prompt variant "${promptVariant}"` +
     (shard ? `, shard ${shard.k}/${shard.n} (${schedule.filter(f => mine(f.index)).length} of them mine)` : '') +
     (done.size ? `, resuming with ${done.size} done` : ''));
 
@@ -422,7 +495,7 @@ export async function runTournament(opts: TournamentOptions): Promise<Tournament
 
     const stats = existsSync(logPath)
       ? statsFromLog(parseJsonl(readFileSync(logPath, 'utf8')))
-      : { tokens: { p1: 0, p2: 0 }, costUsd: { p1: 0, p2: 0 }, invalidCalls: { p1: 0, p2: 0 }, autoSkips: { p1: 0, p2: 0 } };
+      : statsFromLog([]);
     const isVoid = voidReason !== undefined || result === null;
     const winner: TournamentRow['winner'] = isVoid
       ? null
@@ -450,6 +523,9 @@ export async function runTournament(opts: TournamentOptions): Promise<Tournament
       costUsd: stats.costUsd,
       invalidCalls: stats.invalidCalls,
       autoSkips: stats.autoSkips,
+      failures: stats.failures,
+      tokenDetail: stats.tokenDetail,
+      promptVariant,
       logFile: relative(process.cwd(), logPath).split('\\').join('/'),
       finishedAt: new Date().toISOString(),
     };
@@ -497,6 +573,8 @@ async function main(): Promise<void> {
   const gamesPerPair = evenGames(requested);
   if (gamesPerPair !== requested) console.log(`TOURNEY_GAMES=${requested} forced to ${gamesPerPair} (must be even).`);
   const id = process.env.TOURNEY_ID || new Date().toISOString().replace(/[:.]/g, '-');
+  const promptVariant = process.env.TOURNEY_PROMPT_VARIANT || 'default';
+  if (!isPromptVariant(promptVariant)) throw new Error(`TOURNEY_PROMPT_VARIANT must be one of ${PROMPT_VARIANTS.join(', ')}, got "${promptVariant}".`);
 
   const pauseSec = envInt('BENCH_ROUND_PAUSE_SEC');
   const matchMaxUsd = envInt('TOURNEY_MATCH_MAX_USD');
@@ -533,6 +611,7 @@ async function main(): Promise<void> {
         }
       : {}),
     retryVoid: process.env.TOURNEY_RETRY_VOID === '1',
+    promptVariant,
     roundPauseMs: pauseSec !== undefined ? pauseSec * 1000 : 0,
     createController: key => (key === 'baseline' ? 'baseline' : createClient(getModelEntry(key))),
   });

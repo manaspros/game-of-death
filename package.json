@@ -17,7 +17,8 @@
     "studio": "npm run build:bench --silent && vite build && node --env-file-if-exists=.env dist-bench/bench/studio/server.js",
     "export-video": "npm run build:bench --silent && node --env-file-if-exists=.env dist-bench/bench/video/export.js",
     "summary": "npm run build:bench --silent && node dist-bench/bench/summary.js",
-    "leaderboard": "npm run build:bench --silent && node dist-bench/bench/leaderboard.js"
+    "leaderboard": "npm run build:bench --silent && node dist-bench/bench/leaderboard.js",
+    "robustness": "npm run build:bench --silent && node dist-bench/bench/robustness.js"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

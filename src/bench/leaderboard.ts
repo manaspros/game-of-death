@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { latestPerIndex, parseResultRows, TOURNAMENT_DIR, TOURNAMENT_VIDEO_DIR, type TournamentRow } from './tournament';
+import { FAILURE_KINDS, latestPerIndex, parseResultRows, TOURNAMENT_DIR, TOURNAMENT_VIDEO_DIR, type FailureCounts, type TokenDetail, type TournamentRow } from './tournament';
 
 /**
  * Leaderboard for a round-robin tournament.
@@ -52,6 +52,12 @@ export interface ModelStanding {
   invalidPerGame: number | null;
   autoSkipsPerGame: number | null;
   avgTokensPerGame: number | null;
+  /** Mean per-game token split, over the games whose rows carry tokenDetail; null when none do. */
+  tokenSplitPerGame: TokenDetail | null;
+  /** Total tokens / wins; null with no wins. */
+  tokensPerWin: number | null;
+  /** Mean per-game failure counts by cause, over the games whose rows carry failures; null when none do. */
+  failuresPerGame: FailureCounts | null;
   /** Void matches involving this model (excluded from everything else). */
   voidGames: number;
 }
@@ -62,6 +68,8 @@ export interface Leaderboard {
   voidMatches: number;
   bootstrap: number;
   anchor: 'baseline' | 'geometric-mean';
+  /** System prompt variant the tournament ran under. */
+  promptVariant: string;
   models: ModelStanding[];
 }
 
@@ -175,6 +183,13 @@ export function computeLeaderboard(rows: TournamentRow[], opts: LeaderboardOptio
       skips += r.autoSkips[seat];
     }
     const g = mine.length;
+    const seatOf = (r: TournamentRow) => (r.p1 === model ? 'p1' : 'p2');
+    const withSplit = mine.filter(r => r.tokenDetail);
+    const withFailures = mine.filter(r => r.failures);
+    const tokenSplit: TokenDetail = { prompt: 0, completion: 0, thought: 0 };
+    for (const r of withSplit) for (const k of ['prompt', 'completion', 'thought'] as const) tokenSplit[k] += r.tokenDetail![seatOf(r)][k];
+    const failureSum = Object.fromEntries(FAILURE_KINDS.map(k => [k, 0])) as unknown as FailureCounts;
+    for (const r of withFailures) for (const k of FAILURE_KINDS) failureSum[k] += r.failures![seatOf(r)][k];
     const s = samples.get(model)?.slice().sort((x, y) => x - y);
     return {
       rank: 0,
@@ -191,6 +206,13 @@ export function computeLeaderboard(rows: TournamentRow[], opts: LeaderboardOptio
       invalidPerGame: g ? invalid / g : null,
       autoSkipsPerGame: g ? skips / g : null,
       avgTokensPerGame: g ? tokens / g : null,
+      tokenSplitPerGame: withSplit.length
+        ? { prompt: tokenSplit.prompt / withSplit.length, completion: tokenSplit.completion / withSplit.length, thought: tokenSplit.thought / withSplit.length }
+        : null,
+      tokensPerWin: wins ? tokens / wins : null,
+      failuresPerGame: withFailures.length
+        ? (Object.fromEntries(FAILURE_KINDS.map(k => [k, failureSum[k] / withFailures.length])) as unknown as FailureCounts)
+        : null,
       voidGames: rows.filter(r => r.void && (r.a === model || r.b === model)).length,
     };
   });
@@ -203,6 +225,7 @@ export function computeLeaderboard(rows: TournamentRow[], opts: LeaderboardOptio
     voidMatches: rows.length - live.length,
     bootstrap,
     anchor: fitted.has(BASELINE_KEY) ? 'baseline' : 'geometric-mean',
+    promptVariant: rows[0]?.promptVariant ?? 'default',
     models: standings,
   };
 }
@@ -330,23 +353,67 @@ function tableRows(lb: Leaderboard): string[][] {
   ]);
 }
 
-export function renderConsole(lb: Leaderboard): string {
-  const all = [HEADERS, ...tableRows(lb)];
-  const w = HEADERS.map((_, c) => Math.max(...all.map(r => r[c].length)));
+const TOKEN_HEADERS = ['#', 'Model', 'Tokens/game', 'Prompt/game', 'Completion/game', 'Thought/game', 'Tokens/win'];
+
+function tokenRows(lb: Leaderboard): string[][] {
+  return lb.models.map(m => [
+    String(m.rank),
+    m.model,
+    f0(m.avgTokensPerGame),
+    f0(m.tokenSplitPerGame?.prompt ?? null),
+    f0(m.tokenSplitPerGame?.completion ?? null),
+    f0(m.tokenSplitPerGame?.thought ?? null),
+    f0(m.tokensPerWin),
+  ]);
+}
+
+const FAILURE_HEADERS = ['#', 'Model', 'Illegal action', 'Truncated', 'No tool call', 'Malformed call', 'Missing prose', 'Failed attempts', 'Unspent moves'];
+
+function failureRows(lb: Leaderboard): string[][] {
+  return lb.models.map(m => [String(m.rank), m.model, ...FAILURE_KINDS.map(k => f1(m.failuresPerGame?.[k] ?? null))]);
+}
+
+function consoleTable(headers: string[], rows: string[][]): string[] {
+  const all = [headers, ...rows];
+  const w = headers.map((_, c) => Math.max(...all.map(r => r[c].length)));
   const line = (r: string[]) => r.map((cell, c) => (c === 1 ? cell.padEnd(w[c]) : cell.padStart(w[c]))).join('  ');
-  return [`Tournament ${lb.tournamentId}: ${lb.matches} matches (${lb.voidMatches} void), anchor ${lb.anchor} = 1000`, line(HEADERS), ...all.slice(1).map(line)].join('\n');
+  return all.map(line);
+}
+
+export function renderConsole(lb: Leaderboard): string {
+  return [
+    `Tournament ${lb.tournamentId}: ${lb.matches} matches (${lb.voidMatches} void), anchor ${lb.anchor} = 1000, prompt variant ${lb.promptVariant}`,
+    ...consoleTable(HEADERS, tableRows(lb)),
+    '',
+    'Token use (per game):',
+    ...consoleTable(TOKEN_HEADERS, tokenRows(lb)),
+    '',
+    'Failure modes (per game):',
+    ...consoleTable(FAILURE_HEADERS, failureRows(lb)),
+  ].join('\n');
 }
 
 export function renderMarkdown(lb: Leaderboard): string {
   const md = (r: string[]) => `| ${r.join(' | ')} |`;
+  const table = (headers: string[], rows: string[][]) => [md(headers), md(headers.map(() => '---')), ...rows.map(md)];
   return [
     `# Leaderboard: ${lb.tournamentId}`,
     '',
-    `${lb.matches} matches (${lb.voidMatches} void, excluded). Bradley-Terry rating, ${lb.anchor === 'baseline' ? 'baseline' : 'geometric mean'} = 1000, 95% CI from ${lb.bootstrap} bootstrap resamples.`,
+    `${lb.matches} matches (${lb.voidMatches} void, excluded). Bradley-Terry rating, ${lb.anchor === 'baseline' ? 'baseline' : 'geometric mean'} = 1000, 95% CI from ${lb.bootstrap} bootstrap resamples. Prompt variant: ${lb.promptVariant}.`,
     '',
-    md(HEADERS),
-    md(HEADERS.map(() => '---')),
-    ...tableRows(lb).map(md),
+    ...table(HEADERS, tableRows(lb)),
+    '',
+    '## Token use (per game)',
+    '',
+    'Completion includes hidden reasoning for providers that bill it as output; Thought is only reported apart by some providers (Gemini).',
+    '',
+    ...table(TOKEN_HEADERS, tokenRows(lb)),
+    '',
+    '## Failure modes (per game)',
+    '',
+    'Truncated / No tool call / Malformed call are unusable responses after the client retry. Failed attempts counts single HTTP attempts, including ones a retry recovered.',
+    '',
+    ...table(FAILURE_HEADERS, failureRows(lb)),
     '',
   ].join('\n');
 }

@@ -230,6 +230,42 @@ Every call starts fresh: you do not remember earlier calls. Your only memory is 
 - Lanes that arrive outside the target box's rows (or columns): only cells inside the box hurt the Heart.
 - Ending your turn with most of your moves unspent.`;
 
+/**
+ * Prompt variants for robustness runs: same rules and facts, different presentation or coaching.
+ * A ranking that only holds under 'default' says more about the prompt than about the models.
+ *  - default: SYSTEM_PROMPT unchanged.
+ *  - no-strategy: drops the "HOW TO PLAY" coaching section; the rules stay.
+ *  - reordered: the same sections in reverse order (the opening line stays first).
+ */
+export const PROMPT_VARIANTS = ['default', 'no-strategy', 'reordered'] as const;
+export type PromptVariant = (typeof PROMPT_VARIANTS)[number];
+
+export function isPromptVariant(v: string): v is PromptVariant {
+  return (PROMPT_VARIANTS as readonly string[]).includes(v);
+}
+
+export function systemPromptFor(variant: PromptVariant): string {
+  if (variant === 'default') return SYSTEM_PROMPT;
+  const [intro, ...sections] = SYSTEM_PROMPT.split('\n\n# ').map((s, i) => (i === 0 ? s : `# ${s}`));
+  const kept = variant === 'no-strategy' ? sections.filter(s => !s.startsWith('# HOW TO PLAY')) : sections.slice().reverse();
+  return [intro, ...kept].join('\n\n');
+}
+
+let activeVariant: PromptVariant = 'default';
+
+/** Selects the system prompt every client sends from now on (process-wide; set once per tournament). */
+export function setPromptVariant(variant: PromptVariant): void {
+  activeVariant = variant;
+}
+
+export function activePromptVariant(): PromptVariant {
+  return activeVariant;
+}
+
+export function activeSystemPrompt(): string {
+  return systemPromptFor(activeVariant);
+}
+
 /** The user message: the observation, plus why the previous call partly failed if it did. */
 export function buildUserMessage(observation: Observation, _availablePresets: string[], previousRejection?: string): string {
   const payload: Record<string, unknown> = { ...observation };

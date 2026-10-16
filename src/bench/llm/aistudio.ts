@@ -6,7 +6,7 @@ import {
   extractNotes,
   extractRationale,
   checkRequiredFields,
-  SYSTEM_PROMPT,
+  activeSystemPrompt,
   TOOL_DEFS,
   toolCallToActions,
   type ToolDef,
@@ -53,7 +53,7 @@ export function buildGeminiBody(
   thinking?: ThinkingLevel,
 ): Record<string, unknown> {
   return {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    systemInstruction: { parts: [{ text: activeSystemPrompt() }] },
     contents: [{ role: 'user', parts: [{ text: buildUserMessage(observation, availablePresets, previousRejection) }] }],
     tools: [{ functionDeclarations: TOOL_DEFS.map(toFunctionDeclaration) }],
     toolConfig: { functionCallingConfig: { mode: 'ANY' } },

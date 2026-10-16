@@ -14,7 +14,8 @@ import { createEventHub } from '../spectator';
 import { findChrome, findFfmpeg } from '../video/export';
 import { parseRetryAfter } from '../llm/pricing';
 import { resolveMaxUsd, runMatch, type PlayerController } from '../match';
-import { buildSchedule, parseShard, runTournament, sanitizeKey, type TournamentRow } from '../tournament';
+import { buildSchedule, parseShard, runTournament, sanitizeKey, statsFromLog, type TournamentRow } from '../tournament';
+import { compareLeaderboards, spearman } from '../robustness';
 import { readChatCompletionStream } from '../llm/sse';
 import { OpenAICompatibleClient } from '../llm/openaiCompatible';
 import { startStudio } from '../studio/server';
@@ -23,7 +24,7 @@ import { buildTimeline, parseJsonl, type LogEvent } from '../replay';
 import { isFatalProviderError, ModelResponseError, ProviderRequestError, ProviderUnavailableError, QuotaExhaustedError } from '../llm/errors';
 import { postJsonWithRetry } from '../llm/http';
 import { createClient, getModelEntry, MODEL_REGISTRY, type ModelEntry } from '../llm/registry';
-import { buildUserMessage, extractAnalysis, extractNotes, GAP, extractRationale, missingRequiredFields, SYSTEM_PROMPT, TOOL_DEFS, toolCallToAction, toolCallToActions } from '../llm/tools';
+import { activePromptVariant, buildUserMessage, extractAnalysis, extractNotes, GAP, extractRationale, missingRequiredFields, setPromptVariant, SYSTEM_PROMPT, systemPromptFor, TOOL_DEFS, toolCallToAction, toolCallToActions } from '../llm/tools';
 import { BlueprintBook, MAX_BATCH, MAX_BLUEPRINTS } from '../blueprints';
 import { compactAction, HISTORY_ROUNDS, MAX_NOTES_CHARS, MAX_TURN_NOTES_CHARS, MatchMemory } from '../memory';
 import { buildPostMortem } from '../postmortem';
@@ -3424,4 +3425,102 @@ test('shard: the USD cap counts the other workers\' spend too', async () => {
     const w1 = await runTournament({ ...base, shard: { k: 1, n: 2 }, maxUsd: 0.4 });
     assert(w1.rows.length === 0 && w1.stoppedForBudget, `worker 1 ran ${w1.rows.length}`);
   });
+});
+
+// ---------- Eval detail: prompt variants, failure modes, token split ----------
+
+test('prompt variants: default is unchanged, no-strategy drops only the coaching, reordered keeps every section', () => {
+  assert(systemPromptFor('default') === SYSTEM_PROMPT, 'default is the original prompt');
+  const sections = (p: string) => p.split('\n').filter(l => l.startsWith('# '));
+  const noStrategy = systemPromptFor('no-strategy');
+  assert(!noStrategy.includes('# HOW TO PLAY') && sections(noStrategy).length === sections(SYSTEM_PROMPT).length - 1, 'one section fewer, the coaching one');
+  assert(noStrategy.includes('# GOAL') && noStrategy.includes('# COMMON MISTAKES'), 'rules and mistakes stay');
+  const reordered = systemPromptFor('reordered');
+  assert(reordered.length === SYSTEM_PROMPT.length, 'same text, only moved');
+  assert(reordered.startsWith('You are playing GAMEOFDEATH'), 'the opening line stays first');
+  assert(sections(reordered).join() === sections(SYSTEM_PROMPT).reverse().join(), 'sections reversed');
+});
+
+test('prompt variants: the active variant is what the clients send', () => {
+  const obs = serializeObservation(new GameState('quick'), 1);
+  try {
+    setPromptVariant('no-strategy');
+    const body = buildGeminiBody(obs, []) as { systemInstruction: { parts: { text: string }[] } };
+    assert(body.systemInstruction.parts[0].text === systemPromptFor('no-strategy'), 'gemini body uses the active variant');
+  } finally {
+    setPromptVariant('default');
+  }
+});
+
+test('statsFromLog: invalid calls are split by cause, with failed attempts, missing prose and unspent moves', () => {
+  const ev = (e: Record<string, unknown>) => e as LogEvent;
+  const s = statsFromLog([
+    ev({ type: 'turn', playerId: 1, applyResult: { ok: false }, promptTokens: 10, completionTokens: 5, thoughtTokens: 2 }),
+    ev({ type: 'turn', playerId: 1, applyResult: { ok: true }, promptTokens: 10, completionTokens: 5 }),
+    ev({ type: 'llm_bad_response', playerId: 1, error: 'Model response was truncated (finish_reason=length); raise maxTokens', finishReason: 'length' }),
+    ev({ type: 'llm_bad_response', playerId: 2, error: 'Model response contained no tool call.' }),
+    ev({ type: 'llm_bad_response', playerId: 2, error: 'Model response contained no function call.' }),
+    ev({ type: 'llm_bad_response', playerId: 2, error: 'Tool call is missing required fields: placements.' }),
+    ev({ type: 'llm_usage', playerId: 2, promptTokens: 7, completionTokens: 3 }),
+    ev({ type: 'missing_fields_warning', playerId: 1, fields: ['notes'] }),
+    ev({ type: 'attempt_failed', playerId: 2, reason: 'timeout' }),
+    ev({ type: 'force_submit', playerId: 2, movesLeft: 12 }),
+    ev({ type: 'auto_skip', playerId: 2 }),
+  ]);
+  const f1 = s.failures.p1, f2 = s.failures.p2;
+  assert(f1.illegalAction === 1 && f1.truncated === 1 && f1.missingProse === 1, JSON.stringify(f1));
+  assert(f2.noToolCall === 2 && f2.malformedCall === 1 && f2.failedAttempts === 1 && f2.unspentMoves === 12, JSON.stringify(f2));
+  assert(s.invalidCalls.p1 === 2 && s.invalidCalls.p2 === 3, 'invalidCalls unchanged: illegal actions + unusable responses');
+  assert(s.tokenDetail.p1.prompt === 20 && s.tokenDetail.p1.completion === 10 && s.tokenDetail.p1.thought === 2 && s.tokens.p1 === 32, JSON.stringify(s.tokenDetail.p1));
+  assert(s.tokenDetail.p2.prompt === 7 && s.tokens.p2 === 10, 'llm_usage rows count');
+});
+
+test('leaderboard: failure modes and token split are averaged per game from the seat each model sat in', () => {
+  const f = (illegalAction: number, truncated: number) => ({ illegalAction, truncated, noToolCall: 0, malformedCall: 0, missingProse: 0, failedAttempts: 0, unspentMoves: 0 });
+  const t = (prompt: number) => ({ prompt, completion: 10, thought: 0 });
+  const rows = [
+    lbRow(0, 'A', 'B', 'a', { failures: { p1: f(2, 0), p2: f(0, 4) }, tokenDetail: { p1: t(100), p2: t(300) } }),
+    lbRow(1, 'A', 'B', 'a', { failures: { p1: f(0, 2), p2: f(4, 0) }, tokenDetail: { p1: t(500), p2: t(700) } }),
+  ];
+  const lb = computeLeaderboard(rows);
+  const a = standing(lb, 'A'), b = standing(lb, 'B');
+  // Row 0: A is P1; row 1: A is P2.
+  assert(a.failuresPerGame!.illegalAction === 3 && a.failuresPerGame!.truncated === 0, JSON.stringify(a.failuresPerGame));
+  assert(b.failuresPerGame!.truncated === 3 && b.failuresPerGame!.illegalAction === 0, JSON.stringify(b.failuresPerGame));
+  assert(a.tokenSplitPerGame!.prompt === 400 && b.tokenSplitPerGame!.prompt === 400, `${a.tokenSplitPerGame!.prompt} ${b.tokenSplitPerGame!.prompt}`);
+  assert(a.tokensPerWin === 150 && b.tokensPerWin === null, `tokens/win ${a.tokensPerWin} ${b.tokensPerWin}`);
+  assert(lb.promptVariant === 'default', 'rows without a variant are default');
+  const old = computeLeaderboard(lbRows('A', 'B', 2, 'a'));
+  assert(standing(old, 'A').failuresPerGame === null && standing(old, 'A').tokenSplitPerGame === null, 'rows from before the split give null, not zeros');
+  assert(renderConsole(lb).includes('Failure modes (per game):') && renderConsole(lb).includes('Token use (per game):'), 'console shows both new tables');
+});
+
+test('tournament: the prompt variant is used, saved in meta.json and on every row, and a mismatch refuses to resume', async () => {
+  await withTempDir(async dir => {
+    const base = { ...QUICK, models: ['fa', 'baseline'], gamesPerPair: 2, id: 'pv', baseDir: dir, createController: tourneyFactory() };
+    try {
+      await runTournament({ ...base, promptVariant: 'reordered', maxMatches: 1 });
+      assert(activePromptVariant() === 'reordered', 'the run selects the variant');
+      const meta = JSON.parse(readFileSync(join(dir, 'pv', 'meta.json'), 'utf8')) as { promptVariant: string };
+      assert(meta.promptVariant === 'reordered', JSON.stringify(meta));
+      const rows = readRows(dir, 'pv');
+      assert(rows[0].promptVariant === 'reordered' && rows[0].failures !== undefined && rows[0].tokenDetail !== undefined, 'row carries variant, failures and token split');
+      await rejects(runTournament({ ...base }), /prompt variant reordered -> default/, 'variant change');
+      assert(computeLeaderboard(loadResults('pv', dir)).promptVariant === 'reordered', 'leaderboard reports the variant');
+    } finally {
+      setPromptVariant('default');
+    }
+  });
+});
+
+test('robustness: spearman and the cross-variant comparison', () => {
+  assert(spearman([1, 2, 3], [10, 20, 30]) === 1 && spearman([1, 2, 3], [3, 2, 1]) === -1, 'perfect orders');
+  assert(spearman([1], [1]) === null && spearman([1, 1], [1, 2]) === null, 'too few values or no spread');
+  const ref = computeLeaderboard([...lbRows('A', 'B', 6, 'a'), ...lbRows('B', 'C', 6, 'a').map((r, i) => ({ ...r, index: 6 + i }))], { tournamentId: 'r' });
+  const flip = computeLeaderboard([...lbRows('A', 'B', 6, 'b'), ...lbRows('B', 'C', 6, 'b').map((r, i) => ({ ...r, index: 6 + i }))].map(r => ({ ...r, promptVariant: 'reordered' as const })), { tournamentId: 'f' });
+  const cmp = compareLeaderboards([ref, ref, flip]);
+  assert(cmp.spearman[0] === 1 && cmp.spearman[1] === 1 && cmp.spearman[2] === -1, JSON.stringify(cmp.spearman));
+  assert(cmp.tournaments[2].promptVariant === 'reordered', 'variant carried through');
+  const a = cmp.models.find(m => m.model === 'A')!;
+  assert(a.ranks.join() === '1,1,3' && a.maxShift! > 0 && a.outsideReferenceCi, JSON.stringify(a));
 });
